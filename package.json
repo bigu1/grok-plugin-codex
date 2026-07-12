@@ -1,0 +1,25 @@
+{
+  "name": "grok-in-codex",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Codex plugin for delegating reviews, rescue tasks, and media generation to the Grok CLI",
+  "type": "module",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "companion": "node plugins/grok/scripts/grok-companion.mjs",
+    "mcp": "node plugins/grok/mcp/server.mjs",
+    "setup": "node plugins/grok/scripts/grok-companion.mjs setup",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stdevMac/grok-in-codex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stdevMac/grok-in-codex/issues"
+  },
+  "homepage": "https://github.com/stdevMac/grok-in-codex#readme",
+  "license": "Apache-2.0"
+}

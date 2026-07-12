@@ -1,0 +1,43 @@
+{
+  "name": "grok",
+  "version": "0.1.0",
+  "description": "Use Grok from Codex to review code, delegate tasks, and generate images or videos.",
+  "author": {
+    "name": "stdevMac",
+    "url": "https://github.com/stdevMac"
+  },
+  "homepage": "https://github.com/stdevMac/grok-in-codex",
+  "repository": "https://github.com/stdevMac/grok-in-codex",
+  "license": "Apache-2.0",
+  "keywords": [
+    "grok",
+    "xai",
+    "codex",
+    "mcp",
+    "code-review",
+    "delegation",
+    "image-generation",
+    "video-generation"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Grok",
+    "shortDescription": "Delegate reviews, rescue tasks, and media generation to Grok",
+    "longDescription": "Use the Grok CLI from Codex for structured code review, adversarial review, write-capable rescue tasks, background jobs, image generation, video generation, job status, result retrieval, cancellation, and context transfer.",
+    "developerName": "stdevMac",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/stdevMac/grok-in-codex",
+    "defaultPrompt": [
+      "Ask Grok to review this branch",
+      "Use Grok to investigate this bug",
+      "Generate an image with Grok"
+    ],
+    "brandColor": "#111111"
+  }
+}

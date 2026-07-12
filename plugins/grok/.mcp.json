@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "grok": {
+      "command": "node",
+      "args": [
+        "./mcp/server.mjs"
+      ],
+      "cwd": "."
+    }
+  }
+}
