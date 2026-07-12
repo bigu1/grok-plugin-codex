@@ -4,6 +4,8 @@ Use Grok from inside Codex for code reviews, delegated coding tasks, background 
 
 Codex stays the orchestrator. This plugin exposes a small MCP server that calls the local Grok CLI through a shared companion runtime.
 
+Using Claude Code instead? Use the sibling plugin: [grok-in-claude](https://github.com/stdevMac/grok-in-claude).
+
 ## What You Get
 
 | Codex tool | Purpose |
@@ -39,6 +41,17 @@ Typical Grok CLI locations:
 ~/.grok/bin/grok
 ~/.local/bin/grok
 ```
+
+## Install
+
+From GitHub:
+
+```bash
+codex plugin marketplace add stdevMac/grok-in-codex
+codex plugin add grok@grok-in-codex
+```
+
+Then start a new Codex thread so the plugin skills and MCP tools are loaded.
 
 ## Install Locally
 
