@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const SERVER_VERSION = "0.1.0";
@@ -369,9 +370,14 @@ export function runCompanion(toolName, input = {}) {
   });
 }
 
+/**
+ * Codex plugin MCP hosts speak newline-delimited JSON over stdio
+ * (same framing as bundled plugins such as sites / codex-security).
+ * Do not use LSP Content-Length framing — Codex never sends those headers,
+ * so tools/list never completes and grok_* tools never appear in the session.
+ */
 function sendMessage(message) {
-  const body = JSON.stringify(message);
-  process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
 async function handleRequest(message) {
@@ -397,8 +403,13 @@ async function handleRequest(message) {
         return { jsonrpc: "2.0", id, result };
       }
       case "notifications/initialized":
+      case "notifications/cancelled":
         return null;
       default:
+        // Notifications have no id; do not error-reply to them.
+        if (id === undefined || id === null) {
+          return null;
+        }
         return {
           jsonrpc: "2.0",
           id,
@@ -406,6 +417,9 @@ async function handleRequest(message) {
         };
     }
   } catch (error) {
+    if (id === undefined || id === null) {
+      return null;
+    }
     return {
       jsonrpc: "2.0",
       id,
@@ -418,38 +432,33 @@ async function handleRequest(message) {
 }
 
 function startStdioServer() {
-  let buffer = Buffer.alloc(0);
+  const lines = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity
+  });
 
-  process.stdin.on("data", async (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
+  lines.on("line", (line) => {
+    if (line.trim().length === 0) {
+      return;
+    }
 
-    while (true) {
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) {
-        return;
-      }
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return;
+    }
 
-      const header = buffer.slice(0, headerEnd).toString("utf8");
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      if (!match) {
-        throw new Error("Missing Content-Length header");
-      }
+    // Ignore client responses (we do not issue server→client requests yet).
+    if (message.method === undefined && message.id !== undefined) {
+      return;
+    }
 
-      const length = Number(match[1]);
-      const bodyStart = headerEnd + 4;
-      const bodyEnd = bodyStart + length;
-      if (buffer.length < bodyEnd) {
-        return;
-      }
-
-      const body = buffer.slice(bodyStart, bodyEnd).toString("utf8");
-      buffer = buffer.slice(bodyEnd);
-
-      const response = await handleRequest(JSON.parse(body));
+    void handleRequest(message).then((response) => {
       if (response) {
         sendMessage(response);
       }
-    }
+    });
   });
 }
 
