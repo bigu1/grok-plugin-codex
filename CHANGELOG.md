@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.8
+
+### Fixed
+- **MCP workspace scoping**: every tool accepts `cwd` so installed-plugin MCP calls run against the active project (not the plugin cache). Companion spawn uses that directory for jobs, git, and artifacts.
+
+### Notes
+- Behavioral parity with grok-in-claude **v0.5.7** retained; this release is Codex-host-specific.
+
+
 ## 0.5.7
 
 ### Fixed

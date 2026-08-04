@@ -1,6 +1,6 @@
 {
   "name": "grok-in-codex",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
   "description": "Codex plugin for orchestrating Grok Build (rescue, plan, design, workflows, reviews, media, docs)",
   "type": "module",

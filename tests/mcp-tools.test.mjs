@@ -265,7 +265,7 @@ test("stdio MCP transport speaks NDJSON (Codex framing)", async () => {
     if (init && tools && status) {
       child.kill();
       assert.equal(init.result?.serverInfo?.name, "grok-in-codex");
-      assert.equal(init.result?.serverInfo?.version, "0.5.7");
+      assert.equal(init.result?.serverInfo?.version, "0.5.8");
       assert.ok(Array.isArray(tools.result?.tools));
       assert.equal(tools.result.tools.length, EXPECTED_TOOLS.length);
       assert.ok(tools.result.tools.some((t) => t.name === "grok_plan"));
