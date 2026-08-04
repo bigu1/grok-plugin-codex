@@ -1,8 +1,15 @@
+import { preferPlanArtifactText, primaryArtifacts } from "./artifacts.mjs";
+
 function escapeCell(value) {
   return String(value ?? "")
     .replace(/\|/g, "\\|")
     .replace(/\r?\n/g, " ")
     .trim();
+}
+
+function primaryArtifactsFromJob(job) {
+  const list = primaryArtifacts(job?.artifacts || [], { limit: 5 });
+  return list.map((a) => (typeof a === "string" ? a : a.path)).filter(Boolean);
 }
 
 function short(value, max = 80) {
@@ -32,15 +39,28 @@ export function renderSetupReport(payload) {
   if (payload.version) {
     lines.push(`- **Version**: ${payload.version}`);
   }
+  if (payload.versionOk === false) {
+    lines.push(
+      `- **Version floor**: ⚠ below minimum ${payload.minVersion || "0.2.118"} (some features may fail)`
+    );
+  } else if (payload.versionOk) {
+    lines.push(`- **Version floor**: ok (≥ ${payload.minVersion || "0.2.118"})`);
+  }
   lines.push(`- **Auth**: ${payload.authenticated ? "ok" : "not ready"}`);
   if (payload.authDetail) {
     lines.push(`- **Auth detail**: ${payload.authDetail}`);
   }
+  if (payload.doctorDetail) {
+    lines.push(`- **Doctor**: ${payload.doctorOk ? "ok" : "issues"} — ${short(payload.doctorDetail, 120)}`);
+  }
+  lines.push(
+    `- **Stop review gate**: ${payload.stopReviewGate ? "enabled" : "disabled"}`
+  );
   if (payload.ready) {
     lines.push(
       "",
-      "Grok is ready for `grok_rescue`, `grok_review`, `grok_image`, and `grok_video`.",
-      "Background jobs can run in parallel. Use `grok_status`, `grok_result`, and `grok_cancel` with explicit job ids."
+      "Grok is ready. Commands: rescue, plan, review, workflow, design, execute-plan, babysit, document, image, video, sessions.",
+      "Agents under `/agents`: `grok:grok-rescue`, `grok:grok-plan`, `grok:grok-review`, `grok:grok-workflow`, `grok:grok-design`, `grok:grok-execute`, `grok:grok-babysit`, `grok:grok-document`, `grok:grok-media`."
     );
   } else {
     lines.push("", "## Next steps");
@@ -48,7 +68,83 @@ export function renderSetupReport(payload) {
       lines.push(`- ${step}`);
     }
   }
+  lines.push(
+    "",
+    "## Optional",
+    "",
+    "- Enable stop-gate: `/grok:setup --enable-review-gate`",
+    "- Disable stop-gate: `/grok:setup --disable-review-gate`"
+  );
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Append usage / postPending / artifacts blocks shared by task + structured review results.
+ */
+function appendResultEnrichment(lines, payload) {
+  if (payload.usage) {
+    lines.push("");
+    lines.push("## Usage");
+    lines.push("");
+    if (payload.usage.num_turns != null) {
+      lines.push(`- **Turns**: ${payload.usage.num_turns}`);
+    }
+    if (payload.usage.total_tokens != null) {
+      lines.push(
+        `- **Tokens**: ${payload.usage.total_tokens} total (in ${payload.usage.input_tokens ?? "?"} / out ${payload.usage.output_tokens ?? "?"}${payload.usage.cache_read_input_tokens != null ? ` / cache_read ${payload.usage.cache_read_input_tokens}` : ""})`
+      );
+    } else if (payload.usage.input_tokens != null || payload.usage.output_tokens != null) {
+      lines.push(
+        `- **Tokens**: in ${payload.usage.input_tokens ?? "?"} / out ${payload.usage.output_tokens ?? "?"}`
+      );
+    }
+    if (payload.usage.total_cost_usd != null && !payload.usage.usage_is_incomplete) {
+      lines.push(`- **Cost**: $${Number(payload.usage.total_cost_usd).toFixed(4)}`);
+    }
+    if (payload.usage.usage_is_incomplete) {
+      lines.push("- **Note**: usage incomplete");
+    }
+  }
+
+  if (payload.postPending) {
+    lines.push("");
+    lines.push("## GitHub pending review");
+    lines.push("");
+    if (payload.postPending.ok && payload.postPending.skipped) {
+      lines.push(`- **Posted**: skipped (${payload.postPending.reason || "policy"})`);
+      if (payload.postPending.message) {
+        lines.push(`- **Detail**: ${payload.postPending.message}`);
+      }
+    } else if (payload.postPending.ok) {
+      lines.push(`- **Posted**: yes`);
+      if (payload.postPending.url) {
+        lines.push(`- **Submit at**: ${payload.postPending.url}`);
+      }
+    } else {
+      lines.push(`- **Posted**: no`);
+      if (payload.postPending.error) {
+        lines.push(`- **Error**: ${payload.postPending.error}`);
+      }
+      if (payload.postPending.findingsPath) {
+        lines.push(`- **Recoverable findings**: \`${payload.postPending.findingsPath}\``);
+      }
+    }
+  }
+
+  if (payload.artifacts?.length) {
+    lines.push("");
+    lines.push("## Artifacts");
+    lines.push("");
+    for (const artifact of payload.artifacts) {
+      if (typeof artifact === "string") {
+        lines.push(`- \`${artifact}\``);
+      } else {
+        lines.push(
+          `- \`${artifact.path}\`${artifact.kind ? ` (${artifact.kind})` : ""}${artifact.label ? ` — ${artifact.label}` : ""}`
+        );
+      }
+    }
+  }
 }
 
 export function renderStructuredReview(payload) {
@@ -96,7 +192,9 @@ export function renderStructuredReview(payload) {
     }
     lines.push("");
   }
-  lines.push("## Follow-ups", "", `- \`grok_status jobId="${payload.jobId}"\``, `- \`grok_result jobId="${payload.jobId}"\``);
+  // Criterion 3: structured reviews still surface usage / postPending / artifacts
+  appendResultEnrichment(lines, payload);
+  lines.push("", "## Follow-ups", "", `- \`/grok:status ${payload.jobId}\``, `- \`/grok:result ${payload.jobId}\``);
   return `${lines.join("\n")}\n`;
 }
 
@@ -131,19 +229,14 @@ export function renderTaskResult(payload) {
     if (payload.mediaDir) {
       lines.push(`- **Output dir**: \`${payload.mediaDir}\``);
     }
+  } else if (payload.kind === "plan" || payload.config?.planMode) {
+    lines.push("- **Mode**: plan (`--permission-mode plan`)");
   } else if (payload.write) {
     lines.push("- **Mode**: write-capable (`--yolo`)");
   } else {
     lines.push("- **Mode**: read-only (denylist)");
   }
-  if (payload.artifacts?.length) {
-    lines.push("");
-    lines.push("## Artifacts");
-    lines.push("");
-    for (const artifact of payload.artifacts) {
-      lines.push(`- \`${artifact}\``);
-    }
-  }
+  appendResultEnrichment(lines, payload);
   lines.push("");
   lines.push("## Output");
   lines.push("");
@@ -154,10 +247,12 @@ export function renderTaskResult(payload) {
   lines.push("");
   lines.push("## Follow-ups");
   lines.push("");
-  lines.push(`- \`grok_status jobId="${payload.jobId}"\``);
-  lines.push(`- \`grok_result jobId="${payload.jobId}"\``);
-  if (payload.grokSessionId && payload.kind === "task") {
-    lines.push(`- \`grok_rescue resume=true prompt="continue from this session"\``);
+  lines.push(`- \`/grok:status ${payload.jobId}\``);
+  lines.push(`- \`/grok:result ${payload.jobId}\``);
+  if (payload.grokSessionId && (payload.kind === "task" || payload.kind === "plan")) {
+    lines.push(
+      `- \`/grok:rescue --resume-session ${payload.grokSessionId} continue from this session\``
+    );
   }
   return `${lines.join("\n")}\n`;
 }
@@ -181,9 +276,9 @@ export function renderBackgroundStarted(payload) {
     "",
     "Check progress with:",
     "",
-    `- \`grok_status jobId="${payload.jobId}"\``,
-    `- \`grok_result jobId="${payload.jobId}"\``,
-    `- \`grok_cancel jobId="${payload.jobId}"\``
+    `- \`/grok:status ${payload.jobId}\``,
+    `- \`/grok:result ${payload.jobId}\``,
+    `- \`/grok:cancel ${payload.jobId}\``
   );
   return `${lines.join("\n")}\n`;
 }
@@ -228,13 +323,47 @@ export function renderStatusReport(jobs, options = {}) {
     if (job.error) {
       lines.push(`- **Error**: ${job.error}`);
     }
+    if (job.usage) {
+      const u = job.usage;
+      const usageBits = [];
+      if (u.num_turns != null) usageBits.push(`turns ${u.num_turns}`);
+      if (u.total_tokens != null) usageBits.push(`tokens ${u.total_tokens}`);
+      if (u.total_cost_usd != null && !u.usage_is_incomplete) {
+        usageBits.push(`$${Number(u.total_cost_usd).toFixed(4)}`);
+      }
+      if (usageBits.length) {
+        lines.push(`- **Usage**: ${usageBits.join(" · ")}`);
+      }
+    }
+    if (job.postPending) {
+      if (job.postPending.ok && job.postPending.skipped) {
+        lines.push(
+          `- **Post-pending**: skipped${job.postPending.reason ? ` (${job.postPending.reason})` : ""}`
+        );
+      } else if (job.postPending.ok) {
+        lines.push(
+          `- **Post-pending**: posted${job.postPending.url ? ` — ${job.postPending.url}` : ""}`
+        );
+      } else {
+        lines.push(
+          `- **Post-pending**: failed${job.postPending.error ? ` — ${job.postPending.error}` : ""}`
+        );
+        if (job.postPending.findingsPath) {
+          lines.push(`- **Recoverable findings**: \`${job.postPending.findingsPath}\``);
+        }
+      }
+    }
+    const primary = primaryArtifactsFromJob(job);
+    if (primary.length) {
+      lines.push(`- **Artifacts**: ${primary.map((p) => `\`${p}\``).join(", ")}`);
+    }
     if (job.logFile) {
       lines.push(`- **Log**: \`${job.logFile}\``);
     }
     if (job.logTail?.length) {
       lines.push("", "## Recent log", "", "```", ...job.logTail, "```");
     }
-    lines.push("", "Follow-ups:", "", `- \`grok_result jobId="${job.id}"\``, `- \`grok_cancel jobId="${job.id}"\``);
+    lines.push("", "Follow-ups:", "", `- \`/grok:result ${job.id}\``, `- \`/grok:cancel ${job.id}\``);
     return `${lines.join("\n")}\n`;
   }
 
@@ -244,7 +373,7 @@ export function renderStatusReport(jobs, options = {}) {
     lines.push(
       `# Grok jobs (${runningCount} running in parallel)`,
       "",
-      "Multiple jobs can run at once. Pass a job id to `grok_result` and `grok_cancel` when more than one is running.",
+      "Multiple agents/jobs can run at once. Pass a job id to `/grok:result` and `/grok:cancel` when more than one is running.",
       ""
     );
   }
@@ -258,7 +387,7 @@ export function renderStatusReport(jobs, options = {}) {
       `| \`${escapeCell(job.id)}\` | ${escapeCell(job.kind || "task")} | ${escapeCell(job.status)} | ${escapeCell(progress)} | ${escapeCell(short(job.summary || job.title || ""))} |`
     );
   }
-  lines.push("", "Use `grok_status` or `grok_result` with a job id for details.");
+  lines.push("", "Use `/grok:status <job-id>` or `/grok:result <job-id>` for details.");
   return `${lines.join("\n")}\n`;
 }
 
@@ -280,8 +409,14 @@ export function renderStoredJobResult(job) {
     if (job.logTail?.length) {
       lines.push("", "## Recent log", "", "```", ...job.logTail, "```");
     }
-    lines.push("", "Wait a bit, then retry `grok_result`, or check `grok_status`.", "");
+    lines.push("", "Wait a bit, then retry `/grok:result`, or check `/grok:status`.", "");
     return lines.join("\n");
+  }
+
+  let text = job.resultText || job.summary || "";
+  // Background plan results: prefer harvested plan.md even if resultText is narration.
+  if (job.kind === "plan") {
+    text = preferPlanArtifactText(text, job.artifacts);
   }
 
   return renderTaskResult({
@@ -291,13 +426,16 @@ export function renderStoredJobResult(job) {
     model: job.model,
     grokSessionId: job.grokSessionId,
     write: job.write,
-    text: job.resultText || job.summary || "",
+    text,
     error: job.error || null,
     review: job.review || null,
     artifacts: job.artifacts || null,
-    bestOfN: job.bestOfN,
-    worktree: job.worktree,
-    check: job.check
+    usage: job.usage || null,
+    config: job.config || null,
+    postPending: job.postPending || null,
+    bestOfN: job.bestOfN ?? job.config?.bestOfN,
+    worktree: job.worktree ?? job.config?.worktree,
+    check: job.check ?? job.config?.check
   });
 }
 
@@ -313,9 +451,9 @@ export function renderCancelReport(job, killed) {
 }
 
 export function renderTransferReport(payload) {
-  const lines = ["# Transfer Codex context to Grok", ""];
+  const lines = ["# Transfer Claude session → Grok", ""];
   if (payload.sessionPath) {
-    lines.push(`- **Codex context source**: \`${payload.sessionPath}\``);
+    lines.push(`- **Claude transcript**: \`${payload.sessionPath}\``);
   }
   if (payload.importCommand) {
     lines.push(`- **Suggested import**: \`${payload.importCommand}\``);

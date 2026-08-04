@@ -31,6 +31,41 @@ export function encodeGrokSessionWorkspaceKey(cwd) {
   return encodeURIComponent(resolved);
 }
 
+/**
+ * macOS often has /var → /private/var; Grok may key sessions by either form.
+ * Return unique encoded keys for path.resolve, realpath, and /var↔/private/var.
+ */
+export function encodeGrokSessionWorkspaceKeys(cwd) {
+  const paths = new Set();
+  const add = (p) => {
+    if (!p) return;
+    try {
+      paths.add(path.resolve(p));
+    } catch {
+      // ignore
+    }
+  };
+  add(cwd);
+  try {
+    add(fs.realpathSync.native(cwd));
+  } catch {
+    try {
+      add(fs.realpathSync(cwd));
+    } catch {
+      // ignore
+    }
+  }
+  // Explicit macOS symlink flip: /var ↔ /private/var
+  for (const p of [...paths]) {
+    if (p.startsWith("/private/var/")) {
+      paths.add(p.replace(/^\/private\/var\//, "/var/"));
+    } else if (p.startsWith("/var/")) {
+      paths.add(`/private${p}`);
+    }
+  }
+  return [...paths].map((p) => encodeURIComponent(p));
+}
+
 export function resolveGrokSessionsRoot() {
   return path.join(os.homedir(), ".grok", "sessions");
 }
@@ -39,7 +74,16 @@ export function resolveGrokSessionDir(cwd, sessionId) {
   if (!sessionId) {
     return null;
   }
-  return path.join(resolveGrokSessionsRoot(), encodeGrokSessionWorkspaceKey(cwd), sessionId);
+  const root = resolveGrokSessionsRoot();
+  // Prefer the first existing candidate (handles /var vs /private/var).
+  for (const key of encodeGrokSessionWorkspaceKeys(cwd)) {
+    const dir = path.join(root, key, sessionId);
+    if (fs.existsSync(dir)) {
+      return dir;
+    }
+  }
+  // Default to path.resolve encoding (create path for writers)
+  return path.join(root, encodeGrokSessionWorkspaceKey(cwd), sessionId);
 }
 
 export function resolveGrokWorkspaceSessionsDir(cwd) {
@@ -258,7 +302,7 @@ export function buildImagePrompt({ prompt, edit, outputDir, aspectRatio }) {
     ? `Edit the existing image at: ${edit}\nUse image_edit. Preserve identity/layout unless asked otherwise.`
     : `Generate a new image with image_gen.`;
 
-  return `You are a media generation agent for Codex.
+  return `You are a media generation agent for Claude Code.
 
 ${editLine}
 
@@ -292,7 +336,7 @@ export function buildVideoPrompt({ prompt, image, refs, outputDir, duration, asp
     );
   }
 
-  return `You are a video generation agent for Codex.
+  return `You are a video generation agent for Claude Code.
 
 ${sourceLines.join("\n")}
 

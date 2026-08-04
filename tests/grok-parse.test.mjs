@@ -3,6 +3,9 @@ import test from "node:test";
 
 import {
   buildGrokArgs,
+  buildGrokBackgroundWrapperSource,
+  formatStreamProgressMessage,
+  getStreamProgressHelperSource,
   humanizeGrokFailure,
   parseGrokJsonOutput
 } from "../plugins/grok/scripts/lib/grok.mjs";
@@ -79,4 +82,86 @@ test("parseGrokJsonOutput humanizes bare RequirementError text", () => {
   );
   assert.equal(parsed.ok, false);
   assert.match(parsed.error, /tool configuration|requirement error/i);
+});
+
+test("formatStreamProgressMessage tails accumulated text", () => {
+  assert.equal(formatStreamProgressMessage("  hello   world  "), "hello world");
+  const long = "a".repeat(200);
+  const msg = formatStreamProgressMessage(long);
+  assert.equal(msg.length, 160);
+  assert.equal(msg, "a".repeat(160));
+});
+
+test("formatStreamProgressMessage is empty until non-whitespace content exists", () => {
+  // Grok emits truthy whitespace-only thought/text chunks; helper must not invent
+  // a prefix-only line — call sites floor empty to "running".
+  assert.equal(formatStreamProgressMessage(""), "");
+  assert.equal(formatStreamProgressMessage("   "), "");
+  assert.equal(formatStreamProgressMessage(" \n\t "), "");
+  assert.equal(formatStreamProgressMessage("", { prefix: "thinking: " }), "");
+  assert.equal(formatStreamProgressMessage("  ", { prefix: "thinking: " }), "");
+  // Floor pattern used by the background worker
+  assert.equal(formatStreamProgressMessage(" \n") || "running", "running");
+  assert.equal(
+    formatStreamProgressMessage("  ", { prefix: "thinking: " }) || "running",
+    "running"
+  );
+});
+
+test("formatStreamProgressMessage tails thinking with prefix (not single token)", () => {
+  // Live repro: thought events stream as tiny chunks; progress must show a tail of all of them.
+  let thoughtAcc = "";
+  for (const chunk of [" frame", "...", " how control.mjs is used", " across the plugin"]) {
+    thoughtAcc += chunk;
+  }
+  const msg = formatStreamProgressMessage(thoughtAcc, { prefix: "thinking: " });
+  assert.match(msg, /^thinking: /);
+  assert.match(msg, /across the plugin/);
+  assert.ok(!/^thinking:  frame\.\.\.$/.test(msg), "must not show only first token");
+  // Last token alone would be " across the plugin" — full tail is longer.
+  assert.ok(msg.length > "thinking:  across the plugin".length);
+});
+
+test("background wrapper embeds the same progress helper tests exercise", () => {
+  const helperSrc = getStreamProgressHelperSource();
+  assert.equal(helperSrc, formatStreamProgressMessage.toString());
+
+  // The string that lands in the worker is the live function body — evaluate it.
+  const embedded = new Function(`${helperSrc}; return formatStreamProgressMessage;`)();
+  assert.equal(embedded("  hello   world  "), "hello world");
+  assert.equal(embedded("a".repeat(200)).length, 160);
+  assert.equal(embedded(" \n") || "running", "running");
+  assert.equal(embedded("  ", { prefix: "thinking: " }) || "running", "running");
+
+  let thoughtAcc = "";
+  for (const chunk of [" frame", "...", " how control.mjs is used", " across the plugin"]) {
+    thoughtAcc += chunk;
+  }
+  const thinking = embedded(thoughtAcc, { prefix: "thinking: " });
+  assert.match(thinking, /^thinking: /);
+  assert.match(thinking, /across the plugin/);
+
+  const wrapper = buildGrokBackgroundWrapperSource({
+    binary: "/usr/bin/true",
+    args: ["-p", "hi"],
+    resultFile: "/tmp/result.json",
+    progressFile: "/tmp/progress.json",
+    cwd: "/tmp",
+    streaming: true
+  });
+  assert.ok(
+    wrapper.includes(helperSrc),
+    "worker script must contain the helper source (not a drifted copy)"
+  );
+  assert.ok(!wrapper.includes("formatProgressTail"), "old inline copy must be gone");
+  assert.match(wrapper, /formatStreamProgressMessage\(thoughtAcc/);
+  assert.match(wrapper, /formatStreamProgressMessage\(textAcc/);
+  // Call-site floor: empty helper result must not blank /status
+  assert.match(
+    wrapper,
+    /formatStreamProgressMessage\(textAcc,\s*\{\}\)\s*\|\|\s*"running"/
+  );
+  assert.match(wrapper, /\|\|\s*"running"/g);
+  const floors = wrapper.match(/\|\|\s*"running"/g) || [];
+  assert.equal(floors.length, 2, "text and thought branches both floor empty progress");
 });

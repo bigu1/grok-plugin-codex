@@ -1,6 +1,19 @@
+/**
+ * Expand a single shell-word argument blob (as Claude Code slash commands pass
+ * `"$ARGUMENTS"`) into argv tokens. Always splits when length === 1 so
+ * flagless multi-word forms like `workflow run name` work.
+ */
+export function expandArgv(argv) {
+  if (Array.isArray(argv) && argv.length === 1 && typeof argv[0] === "string") {
+    return splitRawArgumentString(argv[0]);
+  }
+  return argv;
+}
+
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
+  const arrayOptions = new Set(config.arrayOptions ?? []);
   const aliasMap = config.aliasMap ?? {};
   const options = {};
   const positionals = [];
@@ -33,12 +46,19 @@ export function parseArgs(argv, config = {}) {
         continue;
       }
 
-      if (valueOptions.has(key)) {
+      if (arrayOptions.has(key) || valueOptions.has(key)) {
         const nextValue = inlineValue ?? argv[index + 1];
         if (nextValue === undefined) {
           throw new Error(`Missing value for --${rawKey}`);
         }
-        options[key] = nextValue;
+        if (arrayOptions.has(key)) {
+          if (!Array.isArray(options[key])) {
+            options[key] = [];
+          }
+          options[key].push(nextValue);
+        } else {
+          options[key] = nextValue;
+        }
         if (inlineValue === undefined) {
           index += 1;
         }
@@ -57,12 +77,19 @@ export function parseArgs(argv, config = {}) {
       continue;
     }
 
-    if (valueOptions.has(key)) {
+    if (arrayOptions.has(key) || valueOptions.has(key)) {
       const nextValue = argv[index + 1];
       if (nextValue === undefined) {
         throw new Error(`Missing value for -${shortKey}`);
       }
-      options[key] = nextValue;
+      if (arrayOptions.has(key)) {
+        if (!Array.isArray(options[key])) {
+          options[key] = [];
+        }
+        options[key].push(nextValue);
+      } else {
+        options[key] = nextValue;
+      }
       index += 1;
       continue;
     }

@@ -6,7 +6,29 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
+import { expandArgv, parseArgs } from "./lib/args.mjs";
+import {
+  collectDesignArtifacts,
+  collectDocumentArtifacts,
+  collectPlanArtifacts,
+  collectWorkflowArtifacts,
+  normalizeArtifactList,
+  preferPlanArtifactText,
+  resolveExecutePlanDesignPath
+} from "./lib/artifacts.mjs";
+import { parseBabysitInvocation, buildBabysitPrompt, babysitSupportsBackground } from "./lib/babysit.mjs";
+import {
+  CONTROL_ARRAY_OPTIONS,
+  CONTROL_BOOLEAN_OPTIONS,
+  CONTROL_VALUE_OPTIONS,
+  MIN_GROK_VERSION,
+  applyControlToGrokOptions,
+  compareSemver,
+  controlFromParsedOptions,
+  controlToJobConfig
+} from "./lib/control.mjs";
+import { buildDesignPrompt, buildExecutePlanPrompt, buildPlanModePrompt } from "./lib/design.mjs";
+import { buildDocumentPrompt, normalizeDocumentType } from "./lib/documents.mjs";
 import { collectStopGateContext, resolveReviewTarget } from "./lib/git.mjs";
 import {
   getGrokAuthStatus,
@@ -14,6 +36,7 @@ import {
   humanizeGrokFailure,
   parseGrokJsonOutput,
   runGrok,
+  runGrokDoctor,
   spawnGrokBackground
 } from "./lib/grok.mjs";
 import {
@@ -33,7 +56,9 @@ import {
   resolveJobPidFile,
   resolveJobProgressFile,
   setConfig,
+  shouldAttemptBackgroundFinalize,
   tailLog,
+  tryReadResultPayload,
   upsertJob,
   writeJobFile
 } from "./lib/jobs.mjs";
@@ -44,7 +69,7 @@ import {
   extractArtifactPaths,
   resolveMediaOutputDir
 } from "./lib/media.mjs";
-import { readPidFile, terminateProcessTree, writePidFile } from "./lib/process.mjs";
+import { readPidFile, runCommand, terminateProcessTree, writePidFile } from "./lib/process.mjs";
 import {
   renderBackgroundStarted,
   renderCancelReport,
@@ -57,10 +82,18 @@ import {
 import {
   buildStructuredReviewPrompt,
   getReviewSchemaPath,
+  postPendingForFinishedJob,
   reviewHasBlockingFindings,
   tryParseStructuredReview
 } from "./lib/review.mjs";
+import { exportSession, listSessions, searchSessions } from "./lib/sessions.mjs";
 import { buildTransferPlan } from "./lib/transfer.mjs";
+import { extractUsageFromParsed, extractUsageFromStdout } from "./lib/usage.mjs";
+import {
+  buildWorkflowPrompt,
+  discoverWorkflows,
+  parseWorkflowArgs
+} from "./lib/workflow.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -82,20 +115,52 @@ function printUsage() {
       "  setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  task [--background] [--read-only] [--resume-last|--resume-session <id>|--fresh]",
       "       [--model <id|fast|deep>] [--effort <level>] [--worktree [name]] [--check]",
-      "       [--best-of-n <n>] [prompt]",
+      "       [--best-of-n <n>] [--sandbox <profile>] [--plan] [--permission-mode <mode>]",
+      "       [--agent <name>] [--no-subagents] [--memory|--no-memory]",
+      "       [--allow RULE]... [--deny RULE]... [--disable-web-search] [--fork-session]",
+      "       [--max-turns <n>] [prompt]",
+      "  plan [--background] [--model <id>] [--effort <level>] [control flags...] [prompt]",
       "  task-resume-candidate [--json]",
-      "  review [--background] [--adversarial] [--base <ref>] [--scope auto|working-tree|branch]",
-      "         [--pr <number>] [--model <id>] [--effort <level>] [focus]",
+      "  review [--background] [--adversarial] [--post-pending] [--base <ref>]",
+      "         [--scope auto|working-tree|branch] [--pr <number>] [--model <id>] [focus]",
+      "  workflow list [--json]",
+      "  workflow run <name> [--arg key=value]... [--validate-only] [--background] ...",
+      "  design [--background] [--model deep] [brief]",
+      "  execute-plan [<design-doc>|--latest] [--concurrency N] [--dry-run] [--auto-pr]",
+      "               [--no-graphite] [--resume PLAN_ID] [--instructions text] [--background]",
+      "  babysit add|list|check|remove [pr...] [--background]",
+      "  document --type pptx|pdf|docx [--background] [brief]",
+      "  sessions list|search|export ...",
       "  image [--background] [--edit <path>] [--aspect <ratio>] [--model <id>] [prompt]",
       "  video [--background] [--image <path>] [--ref <path>]... [--duration 6|10]",
       "        [--aspect <ratio>] [--model <id>] [prompt]",
-      "  transfer [--source <codex-history-or-transcript.jsonl>] [--json]",
+      "  transfer [--source <claude-transcript.jsonl>] [--json]",
       "  stop-gate-review [--json]",
       "  status [job-id] [--all] [--json]",
       "  result [job-id] [--json]",
       "  cancel [job-id] [--json]"
     ].join("\n")
   );
+}
+
+function controlParseConfig(extraBoolean = [], extraValue = []) {
+  return {
+    booleanOptions: [
+      "background",
+      "json",
+      "verbatim",
+      ...CONTROL_BOOLEAN_OPTIONS,
+      ...extraBoolean
+    ],
+    valueOptions: [
+      "model",
+      "effort",
+      "cwd",
+      ...CONTROL_VALUE_OPTIONS,
+      ...extraValue
+    ],
+    arrayOptions: [...CONTROL_ARRAY_OPTIONS]
+  };
 }
 
 function outputResult(value, asJson) {
@@ -144,13 +209,6 @@ function titleFromPrompt(prompt, fallback = "Grok task") {
   return compact.length > 72 ? `${compact.slice(0, 71)}…` : compact;
 }
 
-function expandArgv(argv) {
-  if (argv.length === 1 && typeof argv[0] === "string" && argv[0].includes("--")) {
-    return splitRawArgumentString(argv[0]);
-  }
-  return argv;
-}
-
 function writePromptFile(content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grok-companion-"));
   const filePath = path.join(dir, "prompt.md");
@@ -182,6 +240,32 @@ function resolveMediaArtifactsForJob(job, text, sessionId) {
   });
 }
 
+function harvestKindArtifacts(cwd, job, text, sessionId) {
+  const startedMs = Date.parse(job.createdAt || "") || Date.now() - 120_000;
+  if (job.kind === "image" || job.kind === "video") {
+    return resolveMediaArtifactsForJob(job, text, sessionId);
+  }
+  if (job.kind === "plan") {
+    return collectPlanArtifacts(cwd, sessionId, { jobId: job.id });
+  }
+  if (job.kind === "design") {
+    return collectDesignArtifacts(cwd, { sessionId, text, jobId: job.id });
+  }
+  if (job.kind === "workflow") {
+    return collectWorkflowArtifacts(cwd, { text, jobId: job.id });
+  }
+  if (job.kind === "document") {
+    return collectDocumentArtifacts(cwd, {
+      text,
+      sessionId,
+      jobId: job.id,
+      sinceMs: startedMs
+    });
+  }
+  const paths = extractArtifactPaths(text, job.workspaceRoot || cwd);
+  return paths.map((p) => (typeof p === "string" ? { kind: "file", path: p } : p));
+}
+
 function finalizeJob(cwd, job, grokResult, extras = {}) {
   const parsed = grokResult.parsed;
   const ok = grokResult.ok;
@@ -190,10 +274,16 @@ function finalizeJob(cwd, job, grokResult, extras = {}) {
   const status = ok ? "completed" : "failed";
   const finishedAt = nowIso();
   const review = extras.parseReview ? tryParseStructuredReview(text) : null;
-  let artifacts = extras.artifacts || extractArtifactPaths(text, job.workspaceRoot || cwd);
-  if (job.kind === "image" || job.kind === "video") {
-    artifacts = resolveMediaArtifactsForJob(job, text, sessionId);
-  }
+  let artifacts =
+    extras.artifacts ||
+    harvestKindArtifacts(cwd, job, text, sessionId);
+  artifacts = normalizeArtifactList(artifacts);
+
+  const usage =
+    extractUsageFromParsed(parsed?.parsed || parsed) ||
+    extractUsageFromStdout(grokResult.stdout) ||
+    null;
+
   const summary = review
     ? `${review.verdict}: ${titleFromPrompt(review.summary, status)}`
     : titleFromPrompt(text, status);
@@ -207,8 +297,35 @@ function finalizeJob(cwd, job, grokResult, extras = {}) {
         exitCode: grokResult.status
       });
 
+  // Attach flags so post helper can see request even if only extras carried them.
+  const jobForPost = {
+    ...job,
+    wantPostPending: extras.wantPostPending || job.wantPostPending || job.config?.postPending,
+    config: {
+      ...(job.config || {}),
+      postPending: Boolean(
+        extras.wantPostPending || job.config?.postPending || job.wantPostPending
+      )
+    }
+  };
+
+  let postPending = extras.postPendingResult || job.postPending || null;
+  if (status === "completed" && review) {
+    const posted = postPendingForFinishedJob({
+      job: jobForPost,
+      review,
+      cwd,
+      runCommandFn: runCommand,
+      target: extras.reviewTarget || job.reviewTarget || null
+    });
+    if (posted) {
+      postPending = posted;
+    }
+  }
+
   const fullJob = {
     ...job,
+    schemaVersion: 3,
     status,
     finishedAt,
     updatedAt: finishedAt,
@@ -216,6 +333,9 @@ function finalizeJob(cwd, job, grokResult, extras = {}) {
     resultText: text,
     review,
     artifacts,
+    usage,
+    postPending,
+    wantPostPending: Boolean(jobForPost.wantPostPending),
     grokSessionId: sessionId,
     exitCode: grokResult.status,
     error,
@@ -233,7 +353,10 @@ function finalizeJob(cwd, job, grokResult, extras = {}) {
   });
   writeJobFile(cwd, fullJob);
 
-  if (sessionId && (job.kind === "task" || job.kind === "rescue")) {
+  if (
+    sessionId &&
+    (job.kind === "task" || job.kind === "rescue" || job.kind === "plan")
+  ) {
     recordTaskSession(cwd, {
       sessionId,
       jobId: job.id,
@@ -246,21 +369,41 @@ function finalizeJob(cwd, job, grokResult, extras = {}) {
 }
 
 function maybeFinalizeBackgroundJob(cwd, job) {
-  if (!job || job.status !== "running") {
+  // Reconcile when still running *or* reaper false-failed while result.json exists.
+  if (!job || !shouldAttemptBackgroundFinalize(job)) {
     return enrichJob(cwd, job);
   }
 
   const resultPath = job.resultFile;
-  if (!resultPath || !fs.existsSync(resultPath)) {
+  const read = tryReadResultPayload(resultPath);
+  if (!read.ok) {
+    // Defense-in-depth / TOCTOU: shouldAttemptBackgroundFinalize already requires
+    // a complete parseable result, so primary corrupt-result failures come from the
+    // reaper (process dead). This path only fires if the file changed between checks.
+    if (job.status === "running" || job.status === "failed") {
+      const finishedAt = nowIso();
+      const failed = {
+        ...job,
+        status: "failed",
+        finishedAt,
+        updatedAt: finishedAt,
+        summary: "Background Grok result file is corrupt or incomplete",
+        error: `Background result.json is ${read.reason}`,
+        pendingResult: false
+      };
+      upsertJob(cwd, {
+        id: job.id,
+        status: "failed",
+        finishedAt,
+        summary: failed.summary,
+        error: failed.error
+      });
+      writeJobFile(cwd, failed);
+      return enrichJob(cwd, failed);
+    }
     return enrichJob(cwd, job);
   }
-
-  let payload;
-  try {
-    payload = JSON.parse(fs.readFileSync(resultPath, "utf8"));
-  } catch {
-    return enrichJob(cwd, job);
-  }
+  const payload = read.payload;
 
   const parsed = parseGrokJsonOutput(payload.stdout || "");
   const ok = payload.exitCode === 0 && parsed.ok;
@@ -268,13 +411,18 @@ function maybeFinalizeBackgroundJob(cwd, job) {
   const sessionId = parsed.sessionId ?? payload.sessionId ?? null;
   const status = ok ? "completed" : "failed";
   const finishedAt = payload.finishedAt || nowIso();
-  const review = job.kind === "review" || job.kind === "adversarial-review" || job.kind === "stop-gate"
-    ? tryParseStructuredReview(text)
-    : null;
-  const artifacts =
-    job.kind === "image" || job.kind === "video"
-      ? resolveMediaArtifactsForJob(job, text, sessionId)
-      : extractArtifactPaths(text, job.workspaceRoot || cwd);
+  const review =
+    job.kind === "review" || job.kind === "adversarial-review" || job.kind === "stop-gate"
+      ? tryParseStructuredReview(text)
+      : null;
+  const artifacts = normalizeArtifactList(harvestKindArtifacts(cwd, job, text, sessionId));
+  // Prefer plan.md body for plan jobs so /grok:result is useful after background.
+  const resultText =
+    job.kind === "plan" ? preferPlanArtifactText(text, artifacts) : text;
+  const usage =
+    extractUsageFromParsed(parsed?.parsed || parsed) ||
+    extractUsageFromStdout(payload.stdout) ||
+    null;
 
   const error = ok
     ? null
@@ -285,19 +433,49 @@ function maybeFinalizeBackgroundJob(cwd, job) {
         exitCode: payload.exitCode
       });
 
+  const jobForPost = {
+    ...job,
+    wantPostPending: job.wantPostPending || job.config?.postPending,
+    config: {
+      ...(job.config || {}),
+      postPending: Boolean(job.config?.postPending || job.wantPostPending)
+    }
+  };
+
+  let postPending = job.postPending || null;
+  if (status === "completed" && review) {
+    const posted = postPendingForFinishedJob({
+      job: jobForPost,
+      review,
+      cwd,
+      runCommandFn: runCommand,
+      target: job.reviewTarget || null
+    });
+    if (posted) {
+      postPending = posted;
+    }
+  }
+
   const fullJob = {
     ...job,
+    schemaVersion: 3,
     status,
     finishedAt,
     updatedAt: finishedAt,
-    summary: review ? `${review.verdict}: ${titleFromPrompt(review.summary, status)}` : titleFromPrompt(text, status),
-    resultText: text,
+    summary: review
+      ? `${review.verdict}: ${titleFromPrompt(review.summary, status)}`
+      : titleFromPrompt(resultText, status),
+    resultText,
     review,
-    artifacts: [...new Set(artifacts)],
+    artifacts,
+    usage,
+    postPending,
+    wantPostPending: Boolean(jobForPost.wantPostPending),
     grokSessionId: sessionId,
     exitCode: payload.exitCode,
     error,
-    stderr: payload.stderr || null
+    stderr: payload.stderr || null,
+    pendingResult: false
   };
 
   upsertJob(cwd, {
@@ -311,7 +489,10 @@ function maybeFinalizeBackgroundJob(cwd, job) {
   });
   writeJobFile(cwd, fullJob);
 
-  if (sessionId && (job.kind === "task" || job.kind === "rescue")) {
+  if (
+    sessionId &&
+    (job.kind === "task" || job.kind === "rescue" || job.kind === "plan")
+  ) {
     recordTaskSession(cwd, {
       sessionId,
       jobId: job.id,
@@ -331,6 +512,7 @@ function createJobShell(cwd, { kind, title, prompt, write, model, effort, extras
   const promptFile = writePromptFile(prompt);
   const job = {
     id: jobId,
+    schemaVersion: 3,
     kind,
     title,
     prompt,
@@ -345,6 +527,8 @@ function createJobShell(cwd, { kind, title, prompt, write, model, effort, extras
     resultFile,
     progressFile,
     promptFile,
+    usage: null,
+    artifacts: [],
     ...extras
   };
 
@@ -449,12 +633,31 @@ async function commandSetup(argv) {
     : { authenticated: false, detail: availability.reason };
   const config = getConfig(cwd);
 
+  let versionOk = null;
+  if (availability.version) {
+    versionOk = compareSemver(availability.version, MIN_GROK_VERSION) >= 0;
+  }
+
+  let doctor = null;
+  if (availability.available) {
+    try {
+      doctor = runGrokDoctor();
+    } catch (err) {
+      doctor = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   const nextSteps = [];
   if (!availability.available) {
     nextSteps.push("Install the Grok Build CLI and ensure `grok` is on your PATH.");
     nextSteps.push("Typical install location: `~/.grok/bin/grok`.");
   } else if (!auth.authenticated) {
-    nextSteps.push("Run `grok login` in your terminal.");
+    nextSteps.push("Run `grok login` (or login from your host agent shell).");
+  }
+  if (versionOk === false) {
+    nextSteps.push(
+      `Upgrade Grok CLI to ≥ ${MIN_GROK_VERSION} for full plugin features (current: ${availability.version}).`
+    );
   }
 
   const payload = {
@@ -462,8 +665,12 @@ async function commandSetup(argv) {
     available: availability.available,
     binary: availability.binary,
     version: availability.version,
+    versionOk,
+    minVersion: MIN_GROK_VERSION,
     authenticated: auth.authenticated,
     authDetail: auth.detail,
+    doctorOk: doctor ? doctor.ok : null,
+    doctorDetail: doctor ? doctor.detail : null,
     stopReviewGate: Boolean(config.stopReviewGate),
     nextSteps,
     pluginRoot: ROOT_DIR
@@ -510,7 +717,8 @@ async function commandTask(argv) {
       "worktree",
       "check",
       "json",
-      "verbatim"
+      "verbatim",
+      ...CONTROL_BOOLEAN_OPTIONS
     ],
     valueOptions: [
       "model",
@@ -520,8 +728,10 @@ async function commandTask(argv) {
       "best-of-n",
       "worktree-ref",
       "worktree-name",
-      "resume-session"
+      "resume-session",
+      ...CONTROL_VALUE_OPTIONS
     ],
+    arrayOptions: [...CONTROL_ARRAY_OPTIONS],
     aliasMap: {
       "read-only": "read-only",
       "resume-last": "resume-last",
@@ -539,7 +749,8 @@ async function commandTask(argv) {
     throw new Error("Missing task prompt. Example: task fix the failing tests");
   }
 
-  const writeMode = !options["read-only"];
+  const control = controlFromParsedOptions(options);
+  const writeMode = !options["read-only"] && control.permissionMode !== "plan";
   const modelAlias = options.model;
   const model = normalizeModel(options.model);
   const effort = normalizeEffort(options.effort, modelAlias);
@@ -565,6 +776,13 @@ async function commandTask(argv) {
     }
   }
 
+  const jobConfig = controlToJobConfig(control, {
+    bestOfN,
+    worktree: worktree || null,
+    worktreeRef: options["worktree-ref"] || null,
+    check
+  });
+
   const job = createJobShell(cwd, {
     kind: "task",
     title: titleFromPrompt(prompt),
@@ -576,14 +794,15 @@ async function commandTask(argv) {
       resume,
       bestOfN,
       worktree: Boolean(worktree),
-      check
+      check,
+      config: jobConfig
     }
   });
 
-  const grokOptions = {
+  let grokOptions = {
     promptFile: job.promptFile,
     cwd,
-    write: writeMode,
+    write: writeMode || control.permissionMode === "plan",
     model,
     effort,
     resume,
@@ -594,6 +813,7 @@ async function commandTask(argv) {
     worktreeRef: options["worktree-ref"],
     verbatim: Boolean(options.verbatim)
   };
+  grokOptions = applyControlToGrokOptions(grokOptions, control);
 
   runOrBackground(cwd, job, grokOptions, {
     background,
@@ -608,6 +828,9 @@ async function commandTask(argv) {
         grokSessionId: finished.grokSessionId,
         text: finished.resultText,
         error: finished.error,
+        usage: finished.usage,
+        artifacts: finished.artifacts,
+        config: finished.config || jobConfig,
         bestOfN,
         worktree: Boolean(worktree),
         check
@@ -616,16 +839,85 @@ async function commandTask(argv) {
   });
 }
 
+async function commandPlan(argv) {
+  const expanded = expandArgv(argv);
+  const cfg = controlParseConfig();
+  const { options, positionals } = parseArgs(expanded, cfg);
+  const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
+  const userPrompt = positionals.join(" ").trim();
+  if (!userPrompt) {
+    throw new Error("Missing plan prompt. Example: plan redesign the retry layer");
+  }
+
+  const control = controlFromParsedOptions({ ...options, plan: true });
+  const model = normalizeModel(options.model);
+  const effort = normalizeEffort(options.effort, options.model);
+  const prompt = buildPlanModePrompt(userPrompt);
+  const jobConfig = controlToJobConfig(control, {});
+
+  const job = createJobShell(cwd, {
+    kind: "plan",
+    title: titleFromPrompt(userPrompt, "Grok plan"),
+    prompt,
+    write: false,
+    model,
+    effort,
+    extras: { config: jobConfig }
+  });
+
+  let grokOptions = {
+    promptFile: job.promptFile,
+    cwd,
+    write: true,
+    model,
+    effort,
+    yolo: false
+  };
+  grokOptions = applyControlToGrokOptions(grokOptions, control);
+
+  runOrBackground(cwd, job, grokOptions, {
+    background: Boolean(options.background),
+    json: options.json,
+    renderPayload: {
+      build: (finished) => ({
+        jobId: job.id,
+        kind: "plan",
+        status: finished.status,
+        model,
+        write: false,
+        grokSessionId: finished.grokSessionId,
+        text: preferPlanArtifactText(finished.resultText, finished.artifacts),
+        error: finished.error,
+        usage: finished.usage,
+        artifacts: finished.artifacts,
+        config: finished.config || jobConfig
+      })
+    }
+  });
+}
+
+
+
 async function commandReview(argv, { adversarial = false } = {}) {
   const expanded = expandArgv(argv);
   const { options, positionals } = parseArgs(expanded, {
-    booleanOptions: ["background", "json", "wait", "adversarial", "structured"],
-    valueOptions: ["base", "scope", "model", "effort", "cwd", "pr"]
+    booleanOptions: [
+      "background",
+      "json",
+      "wait",
+      "adversarial",
+      "structured",
+      "post-pending",
+      ...CONTROL_BOOLEAN_OPTIONS
+    ],
+    valueOptions: ["base", "scope", "model", "effort", "cwd", "pr", ...CONTROL_VALUE_OPTIONS],
+    arrayOptions: [...CONTROL_ARRAY_OPTIONS]
   });
 
   const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
   const focusText = positionals.join(" ").trim();
   const isAdversarial = adversarial || Boolean(options.adversarial);
+  const postPending = Boolean(options["post-pending"]);
   const target = resolveReviewTarget(cwd, {
     base: options.base,
     scope: options.scope || "auto",
@@ -638,29 +930,44 @@ async function commandReview(argv, { adversarial = false } = {}) {
     return;
   }
 
+  if (postPending && !target.pr) {
+    throw new Error("--post-pending requires --pr <number>");
+  }
+
+  const control = controlFromParsedOptions(options);
   const prompt = buildStructuredReviewPrompt(target, focusText, { adversarial: isAdversarial });
   const model = normalizeModel(options.model);
   const effort = normalizeEffort(options.effort, options.model);
   const kind = isAdversarial ? "adversarial-review" : "review";
+  const jobConfig = controlToJobConfig(control, { postPending });
   const job = createJobShell(cwd, {
     kind,
-    title: titleFromPrompt(focusText || `${isAdversarial ? "Adversarial review" : "Review"} ${target.label}`, "Grok review"),
+    title: titleFromPrompt(
+      focusText || `${isAdversarial ? "Adversarial review" : "Review"} ${target.label}`,
+      "Grok review"
+    ),
     prompt,
     write: false,
     model,
     effort,
     extras: {
+      config: jobConfig,
+      wantPostPending: postPending,
       reviewTarget: {
         kind: target.kind,
         label: target.label,
         baseRef: target.baseRef || null,
-        pr: target.pr || null
+        pr: target.pr || null,
+        headSha: target.headSha || null,
+        owner: target.owner || null,
+        repo: target.repo || null,
+        diff: target.diff || null
       }
     }
   });
 
   const schema = fs.readFileSync(getReviewSchemaPath(), "utf8");
-  const grokOptions = {
+  let grokOptions = {
     promptFile: job.promptFile,
     cwd,
     write: false,
@@ -668,12 +975,21 @@ async function commandReview(argv, { adversarial = false } = {}) {
     effort,
     jsonSchema: schema
   };
+  grokOptions = applyControlToGrokOptions(grokOptions, control);
 
-  runOrBackground(cwd, job, grokOptions, {
+  // Post-pending runs inside finalizeJob (foreground) and maybeFinalizeBackgroundJob
+  // (background + status/result poll) via postPendingForFinishedJob.
+  const finalizeExtras = {
+    parseReview: true,
+    wantPostPending: postPending,
+    reviewTarget: job.reviewTarget
+  };
+
+  const runResult = runOrBackground(cwd, job, grokOptions, {
     background: Boolean(options.background),
     json: options.json,
     renderPayload: {
-      finalizeExtras: { parseReview: true },
+      finalizeExtras,
       build: (finished) => ({
         jobId: job.id,
         kind,
@@ -683,10 +999,487 @@ async function commandReview(argv, { adversarial = false } = {}) {
         grokSessionId: finished.grokSessionId,
         text: finished.resultText,
         error: finished.error,
-        review: finished.review
+        review: finished.review,
+        usage: finished.usage,
+        artifacts: finished.artifacts,
+        postPending: finished.postPending || null,
+        config: jobConfig
       })
     }
   });
+  return runResult;
+}
+
+async function commandWorkflow(argv) {
+  const expanded = expandArgv(argv);
+  const sub = expanded[0];
+  const rest = expanded.slice(1);
+
+  if (!sub || sub === "list") {
+    const { options } = parseArgs(rest, { booleanOptions: ["json"] });
+    const cwd = resolveWorkspaceRoot(process.cwd());
+    const workflows = discoverWorkflows(cwd);
+    const payload = { workflows, count: workflows.length };
+    if (options.json) {
+      outputResult(payload, true);
+    } else {
+      const lines = ["# Grok workflows", ""];
+      if (!workflows.length) {
+        lines.push("_No workflows found in `.grok/workflows/` or `~/.grok/workflows/`._");
+      } else {
+        for (const wf of workflows) {
+          lines.push(
+            `- **${wf.name}** (${wf.scope}) — \`${wf.path}\`${wf.description ? `: ${wf.description}` : ""}`
+          );
+        }
+      }
+      lines.push("", "Run: `workflow run <name> [--arg key=value]...`");
+      outputResult(`${lines.join("\n")}\n`, false);
+    }
+    return;
+  }
+
+  if (sub === "run") {
+    const { options, positionals } = parseArgs(rest, {
+      booleanOptions: [
+        "background",
+        "json",
+        "validate-only",
+        ...CONTROL_BOOLEAN_OPTIONS
+      ],
+      valueOptions: ["model", "effort", "cwd", "arg", ...CONTROL_VALUE_OPTIONS],
+      arrayOptions: ["arg", ...CONTROL_ARRAY_OPTIONS]
+    });
+    const name = positionals[0];
+    if (!name) {
+      throw new Error("workflow run requires a name. Example: workflow run review-changes");
+    }
+    const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
+    const argList = [].concat(options.arg || []);
+    const args = parseWorkflowArgs(argList);
+    const control = controlFromParsedOptions(options);
+    const validateOnly = Boolean(options["validate-only"]);
+    const prompt = buildWorkflowPrompt({
+      name,
+      args,
+      validateOnly
+    });
+    const model = normalizeModel(options.model);
+    const effort = normalizeEffort(options.effort, options.model);
+    const jobConfig = controlToJobConfig(control, { workflowName: name });
+    // validate-only must not grant yolo write+shell — smoke-check only.
+    const writeCapable = !validateOnly;
+
+    const job = createJobShell(cwd, {
+      kind: "workflow",
+      title: titleFromPrompt(`workflow ${name}`, "Grok workflow"),
+      prompt,
+      write: writeCapable,
+      model,
+      effort,
+      extras: { config: jobConfig, workflowName: name, validateOnly }
+    });
+
+    let grokOptions = {
+      promptFile: job.promptFile,
+      cwd,
+      write: writeCapable,
+      model,
+      effort
+    };
+    grokOptions = applyControlToGrokOptions(grokOptions, control);
+
+    runOrBackground(cwd, job, grokOptions, {
+      background: Boolean(options.background),
+      json: options.json,
+      renderPayload: {
+        build: (finished) => ({
+          jobId: job.id,
+          kind: "workflow",
+          status: finished.status,
+          model,
+          write: writeCapable,
+          grokSessionId: finished.grokSessionId,
+          text: finished.resultText,
+          error: finished.error,
+          usage: finished.usage,
+          artifacts: finished.artifacts,
+          config: jobConfig
+        })
+      }
+    });
+    return;
+  }
+
+  throw new Error(`Unknown workflow subcommand: ${sub}. Use list or run.`);
+}
+
+async function commandDesign(argv) {
+  const expanded = expandArgv(argv);
+  const { options, positionals } = parseArgs(expanded, controlParseConfig());
+  const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
+  const brief = positionals.join(" ").trim();
+  if (!brief) {
+    throw new Error("Missing design brief. Example: design add multi-tenant billing");
+  }
+  const control = controlFromParsedOptions(options);
+  const model = normalizeModel(options.model || "deep");
+  const effort = normalizeEffort(options.effort || "high", options.model || "deep");
+  const prompt = buildDesignPrompt(brief);
+  const jobConfig = controlToJobConfig(control, {});
+
+  const job = createJobShell(cwd, {
+    kind: "design",
+    title: titleFromPrompt(brief, "Grok design"),
+    prompt,
+    write: true,
+    model,
+    effort,
+    extras: { config: jobConfig }
+  });
+
+  let grokOptions = {
+    promptFile: job.promptFile,
+    cwd,
+    write: true,
+    model,
+    effort
+  };
+  grokOptions = applyControlToGrokOptions(grokOptions, control);
+
+  runOrBackground(cwd, job, grokOptions, {
+    background: Boolean(options.background),
+    json: options.json,
+    renderPayload: {
+      build: (finished) => ({
+        jobId: job.id,
+        kind: "design",
+        status: finished.status,
+        model,
+        write: true,
+        grokSessionId: finished.grokSessionId,
+        text: finished.resultText,
+        error: finished.error,
+        usage: finished.usage,
+        artifacts: finished.artifacts,
+        config: jobConfig
+      })
+    }
+  });
+}
+
+async function commandExecutePlan(argv) {
+  const expanded = expandArgv(argv);
+  const { options, positionals } = parseArgs(expanded, {
+    booleanOptions: [
+      "background",
+      "json",
+      "dry-run",
+      "auto-pr",
+      "no-graphite",
+      "latest",
+      ...CONTROL_BOOLEAN_OPTIONS
+    ],
+    valueOptions: [
+      "model",
+      "effort",
+      "cwd",
+      "concurrency",
+      "instructions",
+      "resume",
+      ...CONTROL_VALUE_OPTIONS
+    ],
+    arrayOptions: [...CONTROL_ARRAY_OPTIONS]
+  });
+  const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
+  const designDocPath = positionals[0] || null;
+  const resumePlanId = options.resume || null;
+  const wantLatest = Boolean(options.latest) || designDocPath === "latest";
+
+  if (!designDocPath && !resumePlanId && !wantLatest) {
+    throw new Error(
+      "execute-plan requires <design-doc-path>, --latest (newest under .grok-designs/), or --resume <PLAN_ID>"
+    );
+  }
+
+  let absDoc = null;
+  if (!resumePlanId || designDocPath || wantLatest) {
+    if (resumePlanId && !designDocPath && !wantLatest) {
+      absDoc = null;
+    } else {
+      absDoc = resolveExecutePlanDesignPath(cwd, designDocPath, {
+        latest: wantLatest || !designDocPath
+      });
+    }
+  }
+
+  const control = controlFromParsedOptions(options);
+  const model = normalizeModel(options.model);
+  const effort = normalizeEffort(options.effort, options.model);
+  const dryRun = Boolean(options["dry-run"]);
+  const prompt = buildExecutePlanPrompt(absDoc, {
+    concurrency: options.concurrency ? Number(options.concurrency) : 4,
+    dryRun,
+    autoPr: Boolean(options["auto-pr"]),
+    noGraphite: Boolean(options["no-graphite"]),
+    instructions: options.instructions || "",
+    resumePlanId
+  });
+  const jobConfig = controlToJobConfig(control, {});
+  // Dry-run must not get --yolo; report linearized order only.
+  const writeCapable = !dryRun;
+
+  const job = createJobShell(cwd, {
+    kind: "execute-plan",
+    title: titleFromPrompt(
+      resumePlanId
+        ? `execute-plan resume ${resumePlanId}`
+        : `execute-plan ${absDoc || designDocPath || "latest"}`,
+      "Grok execute-plan"
+    ),
+    prompt,
+    write: writeCapable,
+    model,
+    effort,
+    extras: { config: jobConfig, designDocPath: absDoc, resumePlanId, dryRun }
+  });
+
+  let grokOptions = {
+    promptFile: job.promptFile,
+    cwd,
+    write: writeCapable,
+    model,
+    effort
+  };
+  grokOptions = applyControlToGrokOptions(grokOptions, control);
+
+  runOrBackground(cwd, job, grokOptions, {
+    background: Boolean(options.background),
+    json: options.json,
+    renderPayload: {
+      build: (finished) => ({
+        jobId: job.id,
+        kind: "execute-plan",
+        status: finished.status,
+        model,
+        write: writeCapable,
+        grokSessionId: finished.grokSessionId,
+        text: finished.resultText,
+        error: finished.error,
+        usage: finished.usage,
+        artifacts: finished.artifacts,
+        config: jobConfig
+      })
+    }
+  });
+}
+
+async function commandBabysit(argv) {
+  const expanded = expandArgv(argv);
+  const { options, positionals } = parseArgs(expanded, {
+    booleanOptions: ["background", "json", ...CONTROL_BOOLEAN_OPTIONS],
+    valueOptions: ["model", "effort", "cwd", ...CONTROL_VALUE_OPTIONS],
+    arrayOptions: [...CONTROL_ARRAY_OPTIONS]
+  });
+  const { action, prs } = parseBabysitInvocation(positionals);
+  const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
+  const control = controlFromParsedOptions(options);
+  const model = normalizeModel(options.model);
+  const effort = normalizeEffort(options.effort, options.model);
+  const prompt = buildBabysitPrompt(action, prs);
+  const jobConfig = controlToJobConfig(control, { babysitAction: action });
+  const background =
+    options.background != null
+      ? Boolean(options.background)
+      : babysitSupportsBackground(action);
+  // list is read-only; add/remove/check may mutate watchlist or code.
+  const writeCapable = action !== "list";
+
+  const job = createJobShell(cwd, {
+    kind: "babysit",
+    title: titleFromPrompt(`babysit ${action} ${prs.join(" ")}`.trim(), "Grok babysit"),
+    prompt,
+    write: writeCapable,
+    model,
+    effort,
+    extras: { config: jobConfig, babysitAction: action, prs }
+  });
+
+  let grokOptions = {
+    promptFile: job.promptFile,
+    cwd,
+    write: writeCapable,
+    model,
+    effort
+  };
+  grokOptions = applyControlToGrokOptions(grokOptions, control);
+
+  runOrBackground(cwd, job, grokOptions, {
+    background,
+    json: options.json,
+    renderPayload: {
+      build: (finished) => ({
+        jobId: job.id,
+        kind: "babysit",
+        status: finished.status,
+        model,
+        write: writeCapable,
+        grokSessionId: finished.grokSessionId,
+        text: finished.resultText,
+        error: finished.error,
+        usage: finished.usage,
+        artifacts: finished.artifacts,
+        config: jobConfig
+      })
+    }
+  });
+}
+
+async function commandDocument(argv) {
+  const expanded = expandArgv(argv);
+  const { options, positionals } = parseArgs(expanded, {
+    booleanOptions: ["background", "json", ...CONTROL_BOOLEAN_OPTIONS],
+    valueOptions: ["type", "model", "effort", "cwd", "out", ...CONTROL_VALUE_OPTIONS],
+    arrayOptions: [...CONTROL_ARRAY_OPTIONS]
+  });
+  const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
+  const docType = normalizeDocumentType(options.type || "docx");
+  const brief = positionals.join(" ").trim();
+  if (!brief) {
+    throw new Error("Missing document brief. Example: document --type pptx Launch deck for Grok plugin");
+  }
+  const outDir = options.out || path.join(cwd, ".grok-docs");
+  const control = controlFromParsedOptions(options);
+  const model = normalizeModel(options.model);
+  const effort = normalizeEffort(options.effort, options.model);
+  const prompt = buildDocumentPrompt({ type: docType, brief, outputDir: outDir });
+  const jobConfig = controlToJobConfig(control, { documentType: docType });
+
+  const job = createJobShell(cwd, {
+    kind: "document",
+    title: titleFromPrompt(`${docType}: ${brief}`, "Grok document"),
+    prompt,
+    write: true,
+    model,
+    effort,
+    extras: { config: jobConfig, documentType: docType, mediaDir: outDir }
+  });
+
+  let grokOptions = {
+    promptFile: job.promptFile,
+    cwd,
+    write: true,
+    model,
+    effort
+  };
+  grokOptions = applyControlToGrokOptions(grokOptions, control);
+
+  runOrBackground(cwd, job, grokOptions, {
+    background: Boolean(options.background),
+    json: options.json,
+    renderPayload: {
+      build: (finished) => ({
+        jobId: job.id,
+        kind: "document",
+        status: finished.status,
+        model,
+        write: true,
+        grokSessionId: finished.grokSessionId,
+        text: finished.resultText,
+        error: finished.error,
+        usage: finished.usage,
+        artifacts: finished.artifacts,
+        config: jobConfig
+      })
+    }
+  });
+}
+
+async function commandSessions(argv) {
+  const expanded = expandArgv(argv);
+  const sub = expanded[0] || "list";
+  const rest = expanded.slice(1);
+  const cwd = resolveWorkspaceRoot(process.cwd());
+
+  if (sub === "list") {
+    const { options } = parseArgs(rest, {
+      booleanOptions: ["json"],
+      valueOptions: ["limit"]
+    });
+    const sessions = listSessions({
+      cwd,
+      limit: options.limit ? Number(options.limit) : 20
+    });
+    const payload = { sessions, count: sessions.length };
+    if (options.json) {
+      outputResult(payload, true);
+    } else {
+      const lines = ["# Grok sessions", ""];
+      if (!sessions.length) {
+        lines.push("_No sessions found for this workspace._");
+      } else {
+        for (const s of sessions) {
+          lines.push(`- \`${s.id}\`${s.title ? ` — ${s.title}` : ""}`);
+        }
+      }
+      lines.push("", "Export: `sessions export <id> [--out path]`");
+      outputResult(`${lines.join("\n")}\n`, false);
+    }
+    return;
+  }
+
+  if (sub === "search") {
+    const { options, positionals } = parseArgs(rest, {
+      booleanOptions: ["json"],
+      valueOptions: ["limit"]
+    });
+    const query = positionals.join(" ").trim();
+    if (!query) {
+      throw new Error("sessions search requires a query");
+    }
+    const sessions = searchSessions({
+      cwd,
+      query,
+      limit: options.limit ? Number(options.limit) : 20
+    });
+    const payload = { sessions, count: sessions.length, query };
+    if (options.json) {
+      outputResult(payload, true);
+    } else {
+      const lines = [`# Grok sessions matching “${query}”`, ""];
+      for (const s of sessions) {
+        lines.push(`- \`${s.id}\`${s.title ? ` — ${s.title}` : ""}`);
+      }
+      if (!sessions.length) lines.push("_No matches._");
+      outputResult(`${lines.join("\n")}\n`, false);
+    }
+    return;
+  }
+
+  if (sub === "export") {
+    const { options, positionals } = parseArgs(rest, {
+      booleanOptions: ["json"],
+      valueOptions: ["out"]
+    });
+    const sessionId = positionals[0];
+    if (!sessionId) {
+      throw new Error("sessions export requires a session id");
+    }
+    const result = exportSession(sessionId, {
+      outputPath: options.out || null,
+      cwd
+    });
+    if (options.json) {
+      outputResult(result, true);
+    } else if (result.outputPath) {
+      outputResult(`Exported session \`${sessionId}\` to \`${result.outputPath}\`.\n`, false);
+    } else {
+      outputResult(result.markdown || "(empty export)\n", false);
+    }
+    return;
+  }
+
+  throw new Error(`Unknown sessions subcommand: ${sub}. Use list|search|export.`);
 }
 
 async function commandMedia(argv, kind) {
@@ -840,7 +1633,7 @@ async function commandStopGateReview(argv) {
 
   const prompt = buildStructuredReviewPrompt(
     target,
-    "Stop-gate review of the previous Codex turn. Focus on bugs, security, and data-loss risks.",
+    "Stop-gate review of the previous Claude turn. Focus on bugs, security, and data-loss risks.",
     { adversarial: false }
   );
   const job = createJobShell(cwd, {
@@ -853,10 +1646,14 @@ async function commandStopGateReview(argv) {
   });
 
   const schema = fs.readFileSync(getReviewSchemaPath(), "utf8");
+  // Safer stop-gate posture: denylist editors/shell, no yolo, optional sandbox read-only.
   const grokResult = runGrok({
     promptFile: job.promptFile,
     cwd,
     write: false,
+    yolo: false,
+    sandbox: "read-only",
+    noSubagents: true,
     jsonSchema: schema
   });
   const finished = finalizeJob(cwd, job, grokResult, { parseReview: true });
@@ -994,6 +1791,9 @@ async function main() {
       case "task":
         await commandTask(rest);
         break;
+      case "plan":
+        await commandPlan(rest);
+        break;
       case "task-resume-candidate":
         await commandTaskResumeCandidate(rest);
         break;
@@ -1002,6 +1802,24 @@ async function main() {
         break;
       case "adversarial-review":
         await commandReview(rest, { adversarial: true });
+        break;
+      case "workflow":
+        await commandWorkflow(rest);
+        break;
+      case "design":
+        await commandDesign(rest);
+        break;
+      case "execute-plan":
+        await commandExecutePlan(rest);
+        break;
+      case "babysit":
+        await commandBabysit(rest);
+        break;
+      case "document":
+        await commandDocument(rest);
+        break;
+      case "sessions":
+        await commandSessions(rest);
         break;
       case "image":
         await commandMedia(rest, "image");

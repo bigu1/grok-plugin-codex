@@ -83,10 +83,21 @@ export function getBranchDiff(cwd, baseRef, maxBytes = 200_000) {
 
 export function getPrReviewTarget(cwd, prNumber, maxBytes = 200_000) {
   const pr = String(prNumber).replace(/^#/, "");
-  const view = runCommand("gh", ["pr", "view", pr, "--json", "title,body,baseRefName,headRefName,url,number"], {
-    cwd,
-    maxBuffer: 2 * 1024 * 1024
-  });
+  // Include headRefOid + URL so --post-pending can build a PENDING review without a second fetch.
+  const view = runCommand(
+    "gh",
+    [
+      "pr",
+      "view",
+      pr,
+      "--json",
+      "title,body,baseRefName,headRefName,url,number,headRefOid,headRepository,headRepositoryOwner"
+    ],
+    {
+      cwd,
+      maxBuffer: 2 * 1024 * 1024
+    }
+  );
   if (view.error && view.error.code === "ENOENT") {
     throw new Error("`gh` is not installed. Install GitHub CLI to use --pr.");
   }
@@ -120,12 +131,22 @@ export function getPrReviewTarget(cwd, prNumber, maxBytes = 200_000) {
     .filter(Boolean)
     .join("\n");
 
+  const url = meta.url || "";
+  const urlMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//);
+  const owner =
+    urlMatch?.[1] || meta.headRepositoryOwner?.login || null;
+  const repo = urlMatch?.[2] || meta.headRepository?.name || null;
+
   return {
     kind: "pr",
     label: `pull request #${meta.number}`,
     pr: meta.number,
     branch: meta.headRefName || null,
     baseRef: meta.baseRefName || null,
+    headSha: meta.headRefOid || null,
+    owner,
+    repo,
+    url: url || null,
     status,
     diff: diffText,
     empty: !diffText
@@ -171,7 +192,7 @@ export function collectStopGateContext(cwd, maxBytes = 120_000) {
   if (status) {
     return {
       kind: "working-tree",
-      label: "working tree changes from the latest Codex turn",
+      label: "working tree changes from the latest Claude turn",
       status,
       diff: getWorkingTreeDiff(cwd, maxBytes),
       empty: false

@@ -1,6 +1,11 @@
-node_modules/
 .DS_Store
-.grok-media/
 *.log
-npm-debug.log*
 coverage/
+node_modules/
+npm-debug.log*
+.grok-plans/
+.grok-designs/
+.grok-workflows/
+.grok-docs/
+.grok-reviews/
+.grok-media/

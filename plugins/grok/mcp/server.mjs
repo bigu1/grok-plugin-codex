@@ -5,8 +5,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const SERVER_VERSION = "0.1.0";
-const TOOL_PREFIX = "grok_";
+const SERVER_VERSION = "0.5.7";
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const COMPANION = path.join(ROOT_DIR, "scripts", "grok-companion.mjs");
 
@@ -14,10 +13,43 @@ const stringSchema = (description) => ({ type: "string", description });
 const booleanSchema = (description) => ({ type: "boolean", description });
 const integerSchema = (description, minimum = 1) => ({ type: "integer", minimum, description });
 
+/** Shared control surface for long-running Grok jobs (mirrors Claude companion flags). */
+const CONTROL_PROPERTIES = {
+  sandbox: stringSchema("Grok sandbox profile (e.g. read-only, workspace-write)."),
+  planMode: booleanSchema("Enable Grok plan mode (--plan)."),
+  permissionMode: stringSchema("Permission mode passed to Grok."),
+  agent: stringSchema("Grok agent name to use."),
+  noSubagents: booleanSchema("Disable Grok subagents."),
+  memory: booleanSchema("Enable memory for this session."),
+  noMemory: booleanSchema("Disable memory for this session."),
+  allow: {
+    type: "array",
+    items: { type: "string" },
+    description: "Permission allow rules (repeatable)."
+  },
+  deny: {
+    type: "array",
+    items: { type: "string" },
+    description: "Permission deny rules (repeatable)."
+  },
+  disableWebSearch: booleanSchema("Disable web search tools."),
+  forkSession: booleanSchema("Fork the current Grok session."),
+  maxTurns: integerSchema("Maximum Grok turns for this job.")
+};
+
+const COMMON_JOB_PROPERTIES = {
+  background: booleanSchema("Start a background job and return the job id."),
+  model: stringSchema("Grok model id or alias, such as fast or deep."),
+  effort: stringSchema("Reasoning effort: none, minimal, low, medium, high, xhigh, or max."),
+  json: booleanSchema("Return machine-readable JSON from the companion."),
+  ...CONTROL_PROPERTIES
+};
+
 const TOOL_DEFINITIONS = [
   {
     name: "grok_setup",
-    description: "Check Grok CLI availability and authentication.",
+    description:
+      "Check Grok CLI availability, authentication, min version, and doctor. Optionally toggle the stop review gate.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -37,21 +69,30 @@ const TOOL_DEFINITIONS = [
       required: ["prompt"],
       properties: {
         prompt: stringSchema("The task for Grok to investigate, implement, or fix."),
-        background: booleanSchema("Start a background job and return the job id."),
         readOnly: booleanSchema("Prevent source edits by running Grok in read-only mode."),
         resume: booleanSchema("Resume the latest Grok task session for this repository."),
         resumeSession: stringSchema("Resume a specific Grok session id."),
         fresh: booleanSchema("Start a fresh Grok session."),
-        model: stringSchema("Grok model id or alias, such as fast or deep."),
-        effort: stringSchema("Reasoning effort: none, minimal, low, medium, high, xhigh, or max."),
         worktree: booleanSchema("Run edits in a Grok-managed git worktree."),
         worktreeName: stringSchema("Name for a Grok-managed git worktree."),
         worktreeRef: stringSchema("Base ref for the Grok worktree."),
         check: booleanSchema("Ask Grok to verify its own work before returning."),
         bestOfN: integerSchema("Run N parallel attempts of the same task and keep the best."),
-        maxTurns: integerSchema("Maximum Grok turns for this task."),
         verbatim: booleanSchema("Avoid adding extra wrapper instructions to the prompt."),
-        json: booleanSchema("Return machine-readable JSON from the companion.")
+        ...COMMON_JOB_PROPERTIES
+      }
+    }
+  },
+  {
+    name: "grok_plan",
+    description:
+      "Headless Grok plan mode. Explores the codebase and harvests plan.md into .grok-plans/.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        prompt: stringSchema("What to plan. Defaults to a generic explore-and-plan brief."),
+        ...COMMON_JOB_PROPERTIES
       }
     }
   },
@@ -63,13 +104,11 @@ const TOOL_DEFINITIONS = [
       additionalProperties: false,
       properties: {
         focus: stringSchema("Optional review focus, such as auth, race conditions, or data loss."),
-        background: booleanSchema("Start a background review and return the job id."),
         base: stringSchema("Base git ref for branch review."),
         scope: stringSchema("Review scope: auto, working-tree, or branch."),
         pr: stringSchema("GitHub pull request number."),
-        model: stringSchema("Grok model id or alias."),
-        effort: stringSchema("Reasoning effort."),
-        json: booleanSchema("Return machine-readable JSON from the companion.")
+        postPending: booleanSchema("Post pending review findings to the PR when applicable."),
+        ...COMMON_JOB_PROPERTIES
       }
     }
   },
@@ -81,12 +120,111 @@ const TOOL_DEFINITIONS = [
       additionalProperties: false,
       properties: {
         focus: stringSchema("Design or implementation assumptions Grok should challenge."),
-        background: booleanSchema("Start a background review and return the job id."),
         base: stringSchema("Base git ref for branch review."),
         scope: stringSchema("Review scope: auto, working-tree, or branch."),
         pr: stringSchema("GitHub pull request number."),
-        model: stringSchema("Grok model id or alias."),
-        effort: stringSchema("Reasoning effort."),
+        postPending: booleanSchema("Post pending review findings to the PR when applicable."),
+        ...COMMON_JOB_PROPERTIES
+      }
+    }
+  },
+  {
+    name: "grok_workflow",
+    description:
+      "List or run Grok Rhai multi-agent workflows. Use action=list (read-only) or action=run.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: stringSchema("list (default) or run."),
+        name: stringSchema("Workflow name (required for run)."),
+        args: {
+          type: "array",
+          items: { type: "string" },
+          description: "Workflow args as key=value pairs."
+        },
+        validateOnly: booleanSchema("Validate the workflow without executing (read-only)."),
+        prompt: stringSchema("Optional free-form prompt passed after flags."),
+        ...COMMON_JOB_PROPERTIES
+      }
+    }
+  },
+  {
+    name: "grok_design",
+    description:
+      "Run design-doc writer/reviewer loop. Harvests design docs into .grok-designs/.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        prompt: stringSchema("Design brief."),
+        ...COMMON_JOB_PROPERTIES
+      }
+    }
+  },
+  {
+    name: "grok_execute_plan",
+    description:
+      "Execute a design-doc PR Plan DAG. Pass designDoc path, or latest=true for the newest design.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        designDoc: stringSchema("Path to design doc. Omit with latest=true."),
+        latest: booleanSchema("Use the latest design doc under .grok-designs/."),
+        concurrency: integerSchema("Parallel PR plan concurrency."),
+        dryRun: booleanSchema("Dry-run only (read-only, no yolo)."),
+        autoPr: booleanSchema("Open PRs automatically when the plan supports it."),
+        noGraphite: booleanSchema("Disable Graphite stacking."),
+        resume: stringSchema("Resume a prior execute-plan PLAN_ID."),
+        instructions: stringSchema("Extra instructions for the executor."),
+        ...COMMON_JOB_PROPERTIES
+      }
+    }
+  },
+  {
+    name: "grok_babysit",
+    description:
+      "Watch PRs and fix CI/review issues via pr-babysit. action=list is read-only.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: stringSchema("add | list | check | remove. Defaults to list."),
+        prs: {
+          type: "array",
+          items: { type: "string" },
+          description: "PR numbers for add/check/remove."
+        },
+        ...COMMON_JOB_PROPERTIES
+      }
+    }
+  },
+  {
+    name: "grok_document",
+    description: "Generate docx, pdf, or pptx via Grok document skills into .grok-docs/.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        type: stringSchema("Document type: docx, pdf, or pptx."),
+        prompt: stringSchema("Document brief / content request."),
+        ...COMMON_JOB_PROPERTIES
+      }
+    }
+  },
+  {
+    name: "grok_sessions",
+    description: "List, search, or export Grok sessions for this workspace.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: stringSchema("list (default), search, or export."),
+        query: stringSchema("Search query (for search)."),
+        sessionId: stringSchema("Session id (for export)."),
+        limit: integerSchema("Max sessions to return."),
+        output: stringSchema("Export output path."),
         json: booleanSchema("Return machine-readable JSON from the companion.")
       }
     }
@@ -135,7 +273,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "grok_status",
-    description: "Show active and recent Grok jobs, optionally filtered by job id.",
+    description: "Show active and recent Grok jobs, live progress, and usage when available.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -148,7 +286,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "grok_result",
-    description: "Read the stored result for a completed Grok job.",
+    description: "Read the stored result for a completed Grok job (plan body preferred for plan jobs).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -173,7 +311,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "grok_transfer",
-    description: "Build guidance for transferring the current Codex context into Grok.",
+    description: "Build guidance for transferring host-session context into Grok.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -203,14 +341,46 @@ function pushValue(args, value, flag) {
   }
 }
 
-function appendReviewArgs(args, input) {
+function pushArray(args, values, flag) {
+  if (!Array.isArray(values)) {
+    return;
+  }
+  for (const value of values) {
+    if (hasValue(value)) {
+      args.push(flag, String(value));
+    }
+  }
+}
+
+function appendControlArgs(args, input) {
+  pushValue(args, input.sandbox, "--sandbox");
+  pushFlag(args, input.planMode, "--plan");
+  pushValue(args, input.permissionMode, "--permission-mode");
+  pushValue(args, input.agent, "--agent");
+  pushFlag(args, input.noSubagents, "--no-subagents");
+  pushFlag(args, input.memory, "--memory");
+  pushFlag(args, input.noMemory, "--no-memory");
+  pushArray(args, input.allow, "--allow");
+  pushArray(args, input.deny, "--deny");
+  pushFlag(args, input.disableWebSearch, "--disable-web-search");
+  pushFlag(args, input.forkSession, "--fork-session");
+  pushValue(args, input.maxTurns, "--max-turns");
+}
+
+function appendCommonJobArgs(args, input) {
   pushFlag(args, input.background, "--background");
+  pushValue(args, input.model, "--model");
+  pushValue(args, input.effort, "--effort");
+  appendControlArgs(args, input);
+  pushFlag(args, input.json, "--json");
+}
+
+function appendReviewArgs(args, input) {
+  appendCommonJobArgs(args, input);
   pushValue(args, input.base, "--base");
   pushValue(args, input.scope, "--scope");
   pushValue(args, input.pr, "--pr");
-  pushValue(args, input.model, "--model");
-  pushValue(args, input.effort, "--effort");
-  pushFlag(args, input.json, "--json");
+  pushFlag(args, input.postPending, "--post-pending");
   if (hasValue(input.focus)) {
     args.push(String(input.focus));
   }
@@ -279,9 +449,17 @@ export function buildCompanionInvocation(toolName, input = {}) {
       pushValue(args, input.worktreeRef, "--worktree-ref");
       pushFlag(args, input.check, "--check");
       pushValue(args, input.bestOfN, "--best-of-n");
-      pushValue(args, input.maxTurns, "--max-turns");
       pushFlag(args, input.verbatim, "--verbatim");
+      appendControlArgs(args, input);
       pushFlag(args, input.json, "--json");
+      if (hasValue(input.prompt)) {
+        args.push(String(input.prompt));
+      }
+      break;
+    case "grok_plan":
+      command = "plan";
+      args.push(command);
+      appendCommonJobArgs(args, input);
       if (hasValue(input.prompt)) {
         args.push(String(input.prompt));
       }
@@ -296,6 +474,98 @@ export function buildCompanionInvocation(toolName, input = {}) {
       args.push(command);
       appendReviewArgs(args, input);
       break;
+    case "grok_workflow": {
+      command = "workflow";
+      args.push(command);
+      const action = String(input.action || "list").toLowerCase();
+      if (action === "run") {
+        args.push("run");
+        if (hasValue(input.name)) {
+          args.push(String(input.name));
+        }
+        for (const pair of input.args || []) {
+          if (hasValue(pair)) {
+            args.push("--arg", String(pair));
+          }
+        }
+        pushFlag(args, input.validateOnly, "--validate-only");
+        appendCommonJobArgs(args, input);
+        if (hasValue(input.prompt)) {
+          args.push(String(input.prompt));
+        }
+      } else {
+        args.push("list");
+        pushFlag(args, input.json, "--json");
+      }
+      break;
+    }
+    case "grok_design":
+      command = "design";
+      args.push(command);
+      appendCommonJobArgs(args, input);
+      if (hasValue(input.prompt)) {
+        args.push(String(input.prompt));
+      }
+      break;
+    case "grok_execute_plan":
+      command = "execute-plan";
+      args.push(command);
+      if (input.latest) {
+        args.push("--latest");
+      } else if (hasValue(input.designDoc)) {
+        args.push(String(input.designDoc));
+      }
+      pushValue(args, input.concurrency, "--concurrency");
+      pushFlag(args, input.dryRun, "--dry-run");
+      pushFlag(args, input.autoPr, "--auto-pr");
+      pushFlag(args, input.noGraphite, "--no-graphite");
+      pushValue(args, input.resume, "--resume");
+      pushValue(args, input.instructions, "--instructions");
+      appendCommonJobArgs(args, input);
+      break;
+    case "grok_babysit": {
+      command = "babysit";
+      args.push(command);
+      const action = String(input.action || "list").toLowerCase();
+      args.push(action);
+      for (const pr of input.prs || []) {
+        if (hasValue(pr)) {
+          args.push(String(pr));
+        }
+      }
+      // list is read-only; still allow background for check/add when requested
+      if (action !== "list") {
+        appendCommonJobArgs(args, input);
+      } else {
+        pushFlag(args, input.json, "--json");
+      }
+      break;
+    }
+    case "grok_document":
+      command = "document";
+      args.push(command);
+      pushValue(args, input.type, "--type");
+      appendCommonJobArgs(args, input);
+      if (hasValue(input.prompt)) {
+        args.push(String(input.prompt));
+      }
+      break;
+    case "grok_sessions": {
+      command = "sessions";
+      args.push(command);
+      const action = String(input.action || "list").toLowerCase();
+      args.push(action);
+      if (action === "search" && hasValue(input.query)) {
+        args.push(String(input.query));
+      }
+      if (action === "export" && hasValue(input.sessionId)) {
+        args.push(String(input.sessionId));
+      }
+      pushValue(args, input.limit, "--limit");
+      pushValue(args, input.output, "--output");
+      pushFlag(args, input.json, "--json");
+      break;
+    }
     case "grok_image":
       command = "image";
       args.push(command);
@@ -406,7 +676,6 @@ async function handleRequest(message) {
       case "notifications/cancelled":
         return null;
       default:
-        // Notifications have no id; do not error-reply to them.
         if (id === undefined || id === null) {
           return null;
         }
@@ -449,7 +718,6 @@ function startStdioServer() {
       return;
     }
 
-    // Ignore client responses (we do not issue server→client requests yet).
     if (message.method === undefined && message.id !== undefined) {
       return;
     }

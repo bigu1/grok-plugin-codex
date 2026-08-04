@@ -1,46 +1,47 @@
-# Grok in Codex
+# Grok plugin for Codex
 
-Use Grok from inside Codex for code reviews, delegated coding tasks, background investigations, image generation, and video generation.
+Use [Grok](https://grok.com) from inside Codex for code reviews, delegated coding, planning, multi-agent workflows, design→execute pipelines, PR babysitting, and image/video/document generation.
 
-Codex stays the orchestrator. This plugin exposes a small MCP server that calls the local Grok CLI through a shared companion runtime.
+**Plugin version:** 0.5.7. Codex stays the orchestrator. A thin MCP server + companion script hands real work to Grok on your machine via the local CLI (Grok Build ≥ **0.2.118** recommended).
+
+Artifact dirs (gitignored): `.grok-plans/`, `.grok-designs/`, `.grok-workflows/`, `.grok-docs/`, `.grok-reviews/`, `.grok-media/`.
 
 Using Claude Code instead? Use the sibling plugin: [grok-in-claude](https://github.com/stdevMac/grok-in-claude).
 
-## What You Get
+## What you get
 
-| Codex tool | Purpose |
+| Codex MCP tool | Purpose |
 | --- | --- |
-| `grok_setup` | Check Grok CLI and authentication |
-| `grok_rescue` | Delegate investigation or fixes; write-capable by default |
-| `grok_review` | Structured read-only review of a tree, branch, or PR |
+| `grok_setup` | Check CLI + auth + version floor + doctor; toggle stop review gate |
+| `grok_rescue` | Delegate investigation / fixes (write-capable; full control flags) |
+| `grok_plan` | Plan mode only (explore → plan.md under `.grok-plans/`) |
+| `grok_review` | Structured read-only review (tree / branch / PR; optional `postPending`) |
 | `grok_adversarial_review` | Challenge design, tradeoffs, and assumptions |
-| `grok_image` | Generate or edit images into `.grok-media/image/` |
-| `grok_video` | Generate short videos into `.grok-media/video/` |
-| `grok_status` | Show active and recent Grok jobs |
-| `grok_result` | Read final stored output for a job |
-| `grok_cancel` | Cancel a background job |
+| `grok_workflow` | List/run Grok Rhai multi-agent workflows |
+| `grok_design` | Design doc + PR plan (writer/reviewer loop → `.grok-designs/`) |
+| `grok_execute_plan` | Execute a design-doc PR Plan DAG |
+| `grok_babysit` | Watch PRs / fix CI & review comments (`list` is read-only) |
+| `grok_document` | Generate docx / pdf / pptx → `.grok-docs/` |
+| `grok_image` | Generate or edit images → `.grok-media/image/` |
+| `grok_video` | Generate short videos → `.grok-media/video/` |
+| `grok_sessions` | List / search / export Grok sessions |
 | `grok_transfer` | Build context-transfer guidance for Grok |
+| `grok_status` | Jobs + live progress / log tail + usage when available |
+| `grok_result` | Final output (plan.md preferred for plan jobs; usage + artifacts) |
+| `grok_cancel` | Cancel a background job |
 
-Skills included:
+**Control flags** (rescue/plan/review and long-running jobs): `sandbox`, `planMode` / `permissionMode`, `agent`, `noSubagents`, `memory` / `noMemory`, `allow` / `deny`, `disableWebSearch`, `forkSession`, `maxTurns`.
 
-- `grok-routing` for deciding when to delegate
-- `grok-cli-runtime` for companion runtime rules
-- `grok-prompting` for strong rescue prompts
-- `grok-brand-media` for image/video recipes
+Skills: brand/media recipes, routing (including plan→design→execute-plan), runtime contracts, workflows, prompting.
 
 ## Requirements
 
-- Node.js 18.18 or later
-- Grok CLI on your `PATH`
-- Grok authentication via `grok login`
-- GitHub CLI (`gh`) only for `grok_review` with pull requests
+- **Node.js 18.18 or later**
+- **[Grok Build CLI](https://grok.com)** (`grok`) on your `PATH`
+- **Grok authentication** (`grok login`)
+- **GitHub CLI (`gh`)** only if you use `grok_review` with PRs or post-pending
 
-Typical Grok CLI locations:
-
-```bash
-~/.grok/bin/grok
-~/.local/bin/grok
-```
+Typical CLI location: `~/.grok/bin/grok` (ensure it is on `PATH`).
 
 ## Install
 
@@ -53,16 +54,12 @@ codex plugin add grok@grok-in-codex
 
 Then start a new Codex thread so the plugin skills and MCP tools are loaded.
 
-## Install Locally
-
-From this repository:
+### Install locally
 
 ```bash
 codex plugin marketplace add /path/to/grok-in-codex/.agents/plugins
 codex plugin add grok@grok-in-codex
 ```
-
-Then start a new Codex thread so the plugin skills and MCP tools are loaded.
 
 Run setup:
 
@@ -72,13 +69,12 @@ node plugins/grok/scripts/grok-companion.mjs setup
 
 Or ask Codex to call `grok_setup`.
 
-## Quick Start
-
-Ask Codex naturally:
+## Quick start
 
 ```text
 Ask Grok to review this branch against main.
-Use Grok to investigate why the auth tests are flaky.
+Use Grok to plan the auth rewrite.
+Generate a design doc with Grok, then execute the latest plan dry-run.
 Start a background Grok rescue job for the retry redesign.
 Generate a 16:9 launch banner with Grok.
 Show Grok job status.
@@ -87,105 +83,97 @@ Show Grok job status.
 Direct MCP tool examples:
 
 ```text
+grok_plan prompt="plan the auth rewrite" background=true
+grok_design prompt="design multi-tenant billing" background=true
+grok_execute_plan latest=true dryRun=true
+grok_workflow action=list
 grok_review base=main focus="auth, data loss, and race conditions"
 grok_rescue prompt="investigate why npm test is failing" background=true
+grok_babysit action=list
+grok_document type=pdf prompt="one-pager for the launch"
+grok_sessions action=list
 grok_status
-grok_result jobId="task-abc123"
-grok_image aspect="16:9" prompt="Dark developer-tool launch banner for Grok in Codex"
+grok_result jobId="plan-abc123"
+grok_image aspect="16:9" prompt="Dark developer-tool launch banner"
 grok_video image="./.grok-media/image/hero.png" duration="6" prompt="gentle camera push-in"
 ```
 
-## Usage Notes
+## Depth pipeline
+
+For multi-PR or ambiguous product work, prefer:
+
+1. **`grok_plan`** — explore + harvest `plan.md`
+2. **`grok_design`** — design doc + PR plan under `.grok-designs/`
+3. **`grok_execute_plan`** with `latest=true` — implement the PR DAG
+4. **`grok_review`** / **`grok_babysit`** — quality and CI loop
+
+## Job control semantics
+
+- **Concurrent multi-job support** — no single-job global lock. Prefer `background=true` for long work.
+- **Status** — live progress is a tail of accumulated text *and* thought streams; empty/whitespace-only stream tokens floor to `running`.
+- **Result** — plan jobs prefer harvested `plan.md` body over narration; finished jobs persist `config`, `usage`, and `artifacts` (v3 schema).
+- **Reaper** — dead pid + complete parseable `result.json` reconciles to completed; dead pid + empty/truncated/incomplete result → terminal **failed** with distinct diagnostics (no forever-`running` zombies).
+- **Atomic writes** — background workers write `result.json` via tmp + rename (no partial mid-write; no leftover `.tmp.*` after success).
+- **PR post-pending** — runs on background completion too; skips empty findings; empty/oversize diffs fail closed with recoverable findings under `.grok-reviews/`.
+
+## CLI posture
+
+- Prefer **denylist** (`--disallowed-tools`) over tools allowlist.
+- Media: no yolo / no tools allowlist.
+- `dryRun` / `validateOnly` / babysit `list`: **read-only** (no yolo).
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `GROK_BINARY` | Override path to the `grok` CLI (also used by tests with a mock binary) |
+| `GROK_CODEX_PLUGIN_STATE` | Explicit job-state root for this plugin |
+| `CODEX_PLUGIN_DATA` | Host plugin data dir; trusted only when basename is `grok` / `grok-*` |
+
+Default state root when unset: `~/.grok/codex-plugin/state/`. Codex does **not** share Claude’s `~/.grok/claude-plugin/state` or `GROK_CLAUDE_PLUGIN_STATE`.
+
+## Usage notes
 
 ### Rescue
 
-`grok_rescue` is write-capable by default. Use `readOnly: true` for diagnosis only, and `worktree: true` for risky edits.
+- Write-capable by default.
+- Use `readOnly=true` for investigation-only work.
+- Use `worktree=true` / `check=true` / `bestOfN` for safer or parallel attempts.
+- Full control surface available (sandbox, memory, agent, allow/deny, maxTurns, …).
 
-Useful options:
+### Plan / design / execute
 
-- `background: true` for long-running work
-- `model: "fast"` for quick passes
-- `model: "deep", effort: "high"` for harder problems
-- `worktree: true` to isolate edits
-- `check: true` to ask Grok to verify before returning
-- `bestOfN: 3` to run parallel attempts and select the best
-- `resume: true`, `resumeSession`, or `fresh` for session control
+- Plan mode harvests into `.grok-plans/`; result body prefers the plan file.
+- Design harvests into `.grok-designs/`.
+- `grok_execute_plan` with `latest=true` picks the newest design doc; `dryRun=true` is read-only.
 
 ### Review
 
-`grok_review` is read-only and returns structured findings when parsing succeeds.
-
-Examples:
-
-```text
-grok_review
-grok_review base=main
-grok_review pr=123 focus="security and data-loss risks"
-grok_adversarial_review focus="challenge this caching design"
-```
+- Read-only; never applies patches.
+- `postPending=true` with a PR posts PENDING GitHub review comments when findings exist.
 
 ### Media
 
-Images and videos are copied into project-local output folders:
+- Default outputs land under `.grok-media/image/` and `.grok-media/video/`.
+- Session media is copied into those dirs when Grok leaves files in its session workspace.
 
-```text
-.grok-media/image/
-.grok-media/video/
-```
+### Jobs
 
-Examples:
-
-```text
-grok_image aspect="1:1" prompt="Simple geometric app icon, no text"
-grok_image edit="./assets/logo.png" prompt="Make it monochrome with tighter padding"
-grok_video refs=["shot1.png","shot2.png"] aspect="16:9" duration="6" prompt="product launch cutdown"
-```
-
-Video resolution is limited by the Grok model tier, commonly 480p.
-
-### Job Control
-
-Background jobs can run concurrently. Use explicit job ids when more than one job is active.
-
-```text
-grok_status
-grok_status jobId="task-abc123"
-grok_result jobId="task-abc123"
-grok_cancel jobId="task-abc123"
-```
-
-## How It Works
-
-```text
-Codex
-  -> Grok MCP tool
-    -> node plugins/grok/mcp/server.mjs
-      -> node plugins/grok/scripts/grok-companion.mjs <command>
-        -> grok -p ... --output-format json|streaming-json
-```
-
-Job metadata is stored under:
-
-```text
-~/.grok/codex-plugin/state/<repo-slug-hash>/
-```
-
-Set `CODEX_PLUGIN_DATA` to override the plugin data directory when running in custom environments.
-
-## Security
-
-- `grok_rescue` defaults to full tool auto-approval through Grok CLI write mode.
-- Use `readOnly: true` when you only want analysis.
-- Use `worktree: true` for higher-risk changes.
-- Reviews are read-only.
-- Media commands write under `.grok-media/` and Grok session folders.
+- Background tools return a job id.
+- Use `grok_status` / `grok_result` / `grok_cancel` with that id when multiple jobs are active.
 
 ## Development
 
 ```bash
 npm test
-node plugins/grok/scripts/grok-companion.mjs setup
-node plugins/grok/scripts/grok-companion.mjs review --base main
-node plugins/grok/scripts/grok-companion.mjs task --worktree --check "fix the failing test"
-node plugins/grok/mcp/server.mjs
+node plugins/grok/scripts/grok-companion.mjs setup --json
+node plugins/grok/mcp/server.mjs   # stdio NDJSON MCP server
 ```
+
+## Versioning
+
+Root `package.json`, `plugins/grok/.codex-plugin/plugin.json`, and `.agents/plugins/marketplace.json` (metadata + plugin entry) share the same version string. Bump them together.
+
+## License
+
+Apache-2.0

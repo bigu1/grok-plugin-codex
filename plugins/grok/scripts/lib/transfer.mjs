@@ -4,37 +4,84 @@ import path from "node:path";
 
 import { runCommand } from "./process.mjs";
 
-export function findCodexContextSource(cwd, explicitSource) {
+function encodeProjectDir(cwd) {
+  // Claude Code stores projects as path with / replaced by -
+  return cwd.replace(/\//g, "-");
+}
+
+export function findLatestClaudeTranscript(cwd, explicitSource) {
   if (explicitSource) {
     const resolved = path.resolve(explicitSource);
     if (!fs.existsSync(resolved)) {
-      throw new Error(`Context source not found: ${resolved}`);
+      throw new Error(`Transcript not found: ${resolved}`);
     }
     return resolved;
   }
 
-  const history = path.join(os.homedir(), ".codex", "history.jsonl");
-  if (fs.existsSync(history)) {
-    return history;
+  const projectsRoot = path.join(os.homedir(), ".claude", "projects");
+  if (!fs.existsSync(projectsRoot)) {
+    return null;
   }
 
-  const sessionIndex = path.join(os.homedir(), ".codex", "session_index.jsonl");
-  return fs.existsSync(sessionIndex) ? sessionIndex : null;
+  const encoded = encodeProjectDir(cwd);
+  const candidates = [];
+
+  // Exact project folder
+  const exact = path.join(projectsRoot, encoded);
+  if (fs.existsSync(exact)) {
+    candidates.push(exact);
+  }
+
+  // Fuzzy: folder name contains basenames
+  const base = path.basename(cwd);
+  for (const entry of fs.readdirSync(projectsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (entry.name.includes(base) || entry.name.includes(encoded.slice(0, 40))) {
+      candidates.push(path.join(projectsRoot, entry.name));
+    }
+  }
+
+  let latest = null;
+  let latestMtime = 0;
+  for (const dir of candidates) {
+    let files;
+    try {
+      files = fs.readdirSync(dir).filter((name) => name.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      const full = path.join(dir, file);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.mtimeMs > latestMtime) {
+          latestMtime = stat.mtimeMs;
+          latest = full;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return latest;
 }
 
 export function buildTransferPlan(cwd, options = {}) {
-  const sessionPath = findCodexContextSource(cwd, options.source);
+  const sessionPath = findLatestClaudeTranscript(cwd, options.source);
   if (!sessionPath) {
     return {
       ok: false,
       error:
-        "No Codex history source found under ~/.codex. Pass --source <path-to.jsonl>.",
+        "No Claude Code transcript found for this repository under ~/.claude/projects. Pass --source <path-to.jsonl>.",
       sessionPath: null,
       importCommand: null,
       resumeCommand: null,
       notes: [
-        "Codex commonly stores local conversation history in ~/.codex/history.jsonl.",
-        "You can also continue work with grok_rescue using resume=true and a focused prompt."
+        "Claude stores sessions in ~/.claude/projects/<encoded-cwd>/*.jsonl",
+        "You can also continue work with: /grok:rescue --resume <instruction>"
       ]
     };
   }
@@ -46,7 +93,7 @@ export function buildTransferPlan(cwd, options = {}) {
 
   const notes = [
     "Transfer is best-effort. Grok import support depends on your CLI version.",
-    "After import/resume, continue the work in Grok TUI or with grok_rescue resume=true."
+    "After import/resume, continue the work in Grok TUI or with /grok:rescue --resume."
   ];
 
   if (supportsImport) {
@@ -67,7 +114,7 @@ export function buildTransferPlan(cwd, options = {}) {
     notes: [
       ...notes,
       "This Grok CLI does not expose a documented `import` subcommand in `grok help`.",
-      "Open the context source above and summarize the relevant lines into grok_rescue, or upgrade Grok and retry."
+      "Open the transcript path above and summarize context into /grok:rescue, or upgrade Grok and retry."
     ]
   };
 }

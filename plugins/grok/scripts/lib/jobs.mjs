@@ -7,9 +7,117 @@ import { isProcessRunning, readPidFile } from "./process.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 3;
+const PLUGIN_DATA_ENV = "CODEX_PLUGIN_DATA";
+const GROK_STATE_ENV = "GROK_CODEX_PLUGIN_STATE";
 const FALLBACK_STATE_ROOT = path.join(os.homedir(), ".grok", "codex-plugin", "state");
 const MAX_JOBS = 50;
 const MAX_TASK_SESSIONS = 20;
+
+/**
+ * Only trust CODEX_PLUGIN_DATA when it clearly belongs to *this* grok plugin.
+ * Host data dirs are often `<plugin>-<marketplace>`. Matching a marketplace
+ * substring alone can trust foreign plugins, so we match the **plugin segment**
+ * (basename starts with `grok-` or is `grok`). Claude state uses a separate
+ * env (`GROK_CLAUDE_PLUGIN_STATE` / `claude-plugin` fallback) and is never
+ * read here — Codex only honors `GROK_CODEX_PLUGIN_STATE` / `CODEX_PLUGIN_DATA`.
+ */
+export function isTrustedGrokPluginDataDir(dir) {
+  if (!dir) {
+    return false;
+  }
+  const n = String(dir).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+  const base = n.split("/").pop() || "";
+  // Plugin id is the first hyphen segment(s) before marketplace suffix is hard;
+  // require basename to start with "grok-" or equal "grok".
+  if (base === "grok" || base.startsWith("grok-")) {
+    return true;
+  }
+  // Explicit test / override path markers
+  if (n.includes("grok-plugin-data") || /\/grok-jobs-[^/]+\/grok-plugin-data$/.test(n)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Read and validate a background result.json written by spawnGrokBackground.
+ * Requires parseable JSON with exitCode + stdout (complete wrapper payload).
+ * Partial/truncated files (mid-write kill, ENOSPC) return ok:false so the reaper
+ * can fail the job instead of leaving it "running" forever.
+ */
+export function tryReadResultPayload(resultFile) {
+  if (!resultFile || !fs.existsSync(resultFile)) {
+    return { ok: false, reason: "missing", payload: null };
+  }
+  let raw = "";
+  try {
+    raw = fs.readFileSync(resultFile, "utf8");
+  } catch {
+    return { ok: false, reason: "unreadable", payload: null };
+  }
+  if (!String(raw).trim()) {
+    return { ok: false, reason: "empty", payload: null };
+  }
+  try {
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { ok: false, reason: "invalid", payload: null };
+    }
+    // Wrapper always writes these; absence ⇒ incomplete/corrupt write
+    if (!Object.prototype.hasOwnProperty.call(payload, "exitCode")) {
+      return { ok: false, reason: "incomplete", payload: null };
+    }
+    if (!Object.prototype.hasOwnProperty.call(payload, "stdout")) {
+      return { ok: false, reason: "incomplete", payload: null };
+    }
+    return { ok: true, reason: null, payload };
+  } catch {
+    return { ok: false, reason: "unparseable", payload: null };
+  }
+}
+
+/** True when a complete, parseable result.json is available for reconcile. */
+export function hasResultFile(job) {
+  return tryReadResultPayload(job?.resultFile).ok;
+}
+
+/**
+ * Whether maybeFinalizeBackgroundJob should try to reconcile result.json.
+ * Includes reaper false-failures so a good result is not permanently lost.
+ */
+export function shouldAttemptBackgroundFinalize(job) {
+  if (!job || !hasResultFile(job)) {
+    return false;
+  }
+  if (job.status === "running") {
+    return true;
+  }
+  if (job.status === "failed") {
+    // Reaper race: pid gone before finalize, marked failed while result.json is good
+    if (job.error === "Background Grok process is no longer running") {
+      return true;
+    }
+    if (job.summary === "Process exited without writing a result") {
+      return true;
+    }
+    // Never fully reconciled from result.json
+    if (job.exitCode == null && !job.resultText) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolvePluginStateRoot() {
+  if (process.env[GROK_STATE_ENV]) {
+    return process.env[GROK_STATE_ENV];
+  }
+  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  if (pluginDataDir && isTrustedGrokPluginDataDir(pluginDataDir)) {
+    return path.join(pluginDataDir, "state");
+  }
+  return FALLBACK_STATE_ROOT;
+}
 
 export function nowIso() {
   return new Date().toISOString();
@@ -39,8 +147,7 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env.CODEX_PLUGIN_DATA || process.env.CLAUDE_PLUGIN_DATA;
-  const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT;
+  const stateRoot = resolvePluginStateRoot();
   return path.join(stateRoot, `${slug}-${hash}`);
 }
 
@@ -259,7 +366,11 @@ export function readJobProgress(cwd, jobId) {
   }
 }
 
-export function tailLog(filePath, maxLines = 12) {
+/**
+ * Tail a job log. Truncates huge NDJSON status lines (e.g. available_commands dumps)
+ * so status output stays readable.
+ */
+export function tailLog(filePath, maxLines = 12, { maxBytesPerLine = 480 } = {}) {
   if (!filePath || !fs.existsSync(filePath)) {
     return [];
   }
@@ -268,7 +379,24 @@ export function tailLog(filePath, maxLines = 12) {
     return text
       .split(/\r?\n/)
       .filter(Boolean)
-      .slice(-maxLines);
+      .slice(-maxLines)
+      .map((line) => {
+        const bytes = Buffer.byteLength(line, "utf8");
+        if (bytes <= maxBytesPerLine) {
+          return line;
+        }
+        if (
+          /available_commands|"tools"\s*:|"slash_commands"|stream_event/i.test(line)
+        ) {
+          return `[truncated ${bytes}-byte status/NDJSON line]`;
+        }
+        // Keep head of line for context
+        let cut = line.slice(0, maxBytesPerLine);
+        while (Buffer.byteLength(cut, "utf8") > maxBytesPerLine && cut.length > 0) {
+          cut = cut.slice(0, -1);
+        }
+        return `${cut}…`;
+      });
   } catch {
     return [];
   }
@@ -299,13 +427,36 @@ export function refreshJobLiveness(cwd, job) {
     return { ...job, ...stored, alive: false };
   }
 
+  // Pid gone: only hold "running" when a *complete* result.json is ready to
+  // finalize. Truncated/unparseable files must fail (not zombie forever).
   if (job.status === "running") {
+    const resultPath = job.resultFile || stored?.resultFile;
+    const complete = tryReadResultPayload(resultPath);
+    if (complete.ok) {
+      return {
+        ...job,
+        ...(stored || {}),
+        status: "running",
+        pid: pid ?? job.pid ?? null,
+        alive: false,
+        pendingResult: true
+      };
+    }
+    const corrupt =
+      resultPath &&
+      fs.existsSync(resultPath) &&
+      !complete.ok &&
+      complete.reason !== "missing";
     const finished = {
       ...job,
       status: "failed",
       finishedAt: nowIso(),
-      summary: job.summary || "Process exited without writing a result",
-      error: "Background Grok process is no longer running",
+      summary: corrupt
+        ? "Background Grok result file is corrupt or incomplete"
+        : job.summary || "Process exited without writing a result",
+      error: corrupt
+        ? `Background result.json is ${complete.reason} (process dead)`
+        : "Background Grok process is no longer running",
       alive: false
     };
     upsertJob(cwd, {
@@ -332,7 +483,7 @@ export class AmbiguousJobError extends Error {
   constructor(running) {
     const ids = running.map((job) => `\`${job.id}\``).join(", ");
     super(
-      `Multiple Grok jobs are running (${running.length}). Pass a job id: ${ids}. Use grok_status to list them.`
+      `Multiple Grok jobs are running (${running.length}). Pass a job id: ${ids}. Use \`/grok:status\` to list them.`
     );
     this.name = "AmbiguousJobError";
     this.running = running;

@@ -11,21 +11,44 @@ const SERVER_PATH = path.resolve(
   "../plugins/grok/mcp/server.mjs"
 );
 
+const EXPECTED_TOOLS = [
+  "grok_adversarial_review",
+  "grok_babysit",
+  "grok_cancel",
+  "grok_design",
+  "grok_document",
+  "grok_execute_plan",
+  "grok_image",
+  "grok_plan",
+  "grok_rescue",
+  "grok_result",
+  "grok_review",
+  "grok_sessions",
+  "grok_setup",
+  "grok_status",
+  "grok_transfer",
+  "grok_video",
+  "grok_workflow"
+];
+
 test("listToolDefinitions exposes every Grok capability as a Codex tool", () => {
   const names = listToolDefinitions().map((tool) => tool.name).sort();
+  assert.deepEqual(names, EXPECTED_TOOLS);
+});
 
-  assert.deepEqual(names, [
-    "grok_adversarial_review",
-    "grok_cancel",
-    "grok_image",
-    "grok_rescue",
-    "grok_result",
-    "grok_review",
-    "grok_setup",
-    "grok_status",
-    "grok_transfer",
-    "grok_video"
-  ]);
+test("depth tools for plan/workflow/design/execute/babysit/document/sessions are present", () => {
+  const names = new Set(listToolDefinitions().map((tool) => tool.name));
+  for (const name of [
+    "grok_plan",
+    "grok_workflow",
+    "grok_design",
+    "grok_execute_plan",
+    "grok_babysit",
+    "grok_document",
+    "grok_sessions"
+  ]) {
+    assert.ok(names.has(name), `missing ${name}`);
+  }
 });
 
 test("buildCompanionInvocation maps review arguments to the companion runtime", () => {
@@ -48,7 +71,7 @@ test("buildCompanionInvocation maps review arguments to the companion runtime", 
   ]);
 });
 
-test("buildCompanionInvocation maps rescue aliases and flags", () => {
+test("buildCompanionInvocation maps rescue aliases, control flags, and flags", () => {
   const invocation = buildCompanionInvocation("grok_rescue", {
     prompt: "fix flaky tests",
     model: "deep",
@@ -56,7 +79,10 @@ test("buildCompanionInvocation maps rescue aliases and flags", () => {
     worktree: true,
     check: true,
     bestOfN: 3,
-    resume: true
+    resume: true,
+    sandbox: "workspace-write",
+    noSubagents: true,
+    maxTurns: 40
   });
 
   assert.equal(invocation.command, "task");
@@ -71,8 +97,78 @@ test("buildCompanionInvocation maps rescue aliases and flags", () => {
     "--check",
     "--best-of-n",
     "3",
+    "--sandbox",
+    "workspace-write",
+    "--no-subagents",
+    "--max-turns",
+    "40",
     "fix flaky tests"
   ]);
+});
+
+test("buildCompanionInvocation maps plan and execute-plan depth tools", () => {
+  const plan = buildCompanionInvocation("grok_plan", {
+    prompt: "plan the auth rewrite",
+    background: true,
+    model: "deep"
+  });
+  assert.equal(plan.command, "plan");
+  assert.ok(plan.args.includes("plan"));
+  assert.ok(plan.args.includes("--background"));
+  assert.ok(plan.args.includes("plan the auth rewrite"));
+
+  const exec = buildCompanionInvocation("grok_execute_plan", {
+    latest: true,
+    dryRun: true,
+    concurrency: 2
+  });
+  assert.equal(exec.command, "execute-plan");
+  assert.ok(exec.args.includes("--latest"));
+  assert.ok(exec.args.includes("--dry-run"));
+  assert.ok(exec.args.includes("--concurrency"));
+  assert.ok(exec.args.includes("2"));
+});
+
+test("buildCompanionInvocation maps workflow list/run and babysit list", () => {
+  const list = buildCompanionInvocation("grok_workflow", { action: "list", json: true });
+  assert.deepEqual(list.args, ["workflow", "list", "--json"]);
+
+  const run = buildCompanionInvocation("grok_workflow", {
+    action: "run",
+    name: "review-changes",
+    validateOnly: true,
+    args: ["scope=branch"]
+  });
+  assert.ok(run.args.includes("run"));
+  assert.ok(run.args.includes("review-changes"));
+  assert.ok(run.args.includes("--validate-only"));
+  assert.ok(run.args.includes("--arg"));
+  assert.ok(run.args.includes("scope=branch"));
+
+  const babysit = buildCompanionInvocation("grok_babysit", { action: "list", json: true });
+  assert.deepEqual(babysit.args, ["babysit", "list", "--json"]);
+});
+
+test("buildCompanionInvocation maps sessions and document tools", () => {
+  const sessions = buildCompanionInvocation("grok_sessions", {
+    action: "search",
+    query: "auth",
+    limit: 5,
+    json: true
+  });
+  assert.ok(sessions.args.includes("sessions"));
+  assert.ok(sessions.args.includes("search"));
+  assert.ok(sessions.args.includes("auth"));
+
+  const doc = buildCompanionInvocation("grok_document", {
+    type: "pdf",
+    prompt: "one-pager",
+    background: true
+  });
+  assert.equal(doc.command, "document");
+  assert.ok(doc.args.includes("--type"));
+  assert.ok(doc.args.includes("pdf"));
+  assert.ok(doc.args.includes("one-pager"));
 });
 
 /**
@@ -131,10 +227,11 @@ test("stdio MCP transport speaks NDJSON (Codex framing)", async () => {
     if (init && tools) {
       child.kill();
       assert.equal(init.result?.serverInfo?.name, "grok-in-codex");
+      assert.equal(init.result?.serverInfo?.version, "0.5.7");
       assert.ok(Array.isArray(tools.result?.tools));
-      assert.equal(tools.result.tools.length, 10);
-      assert.ok(tools.result.tools.some((t) => t.name === "grok_video"));
-      // Must not speak LSP Content-Length framing
+      assert.equal(tools.result.tools.length, EXPECTED_TOOLS.length);
+      assert.ok(tools.result.tools.some((t) => t.name === "grok_plan"));
+      assert.ok(tools.result.tools.some((t) => t.name === "grok_workflow"));
       assert.doesNotMatch(stdout, /Content-Length:/i);
       assert.equal(stderr.trim(), "");
       return;

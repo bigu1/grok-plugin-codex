@@ -45,17 +45,40 @@ export function getGrokAvailability() {
       available: false,
       binary: null,
       version: null,
+      versionRaw: null,
       reason: "Grok CLI not found on PATH. Install Grok Build and ensure `grok` is available."
     };
   }
 
   const versionResult = runCommand(binary, ["version"]);
-  const version = versionResult.status === 0 ? versionResult.stdout.trim().split("\n")[0] : null;
+  const versionRaw =
+    versionResult.status === 0 ? versionResult.stdout.trim().split("\n")[0] : null;
   return {
     available: true,
     binary,
-    version,
+    version: versionRaw,
+    versionRaw,
     reason: null
+  };
+}
+
+/**
+ * Run `grok doctor` and return stdout/stderr summary (best-effort).
+ */
+export function runGrokDoctor() {
+  const binary = resolveGrokBinary();
+  if (!binary) {
+    return { ok: false, detail: "Grok CLI not found" };
+  }
+  const result = runCommand(binary, ["doctor"], { maxBuffer: 2 * 1024 * 1024 });
+  const stdout = String(result.stdout ?? "").trim();
+  const stderr = String(result.stderr ?? "").trim();
+  return {
+    ok: result.status === 0,
+    detail: stdout || stderr || `doctor exited ${result.status}`,
+    stdout,
+    stderr,
+    status: result.status
   };
 }
 
@@ -81,7 +104,7 @@ export function getGrokAuthStatus() {
   if (/not logged in|sign in|login|unauthorized|auth/i.test(combined)) {
     return {
       authenticated: false,
-      detail: "Not authenticated. Run `grok login` in your terminal."
+      detail: "Not authenticated. Run `grok login` or `!grok login` from Claude Code."
     };
   }
 
@@ -146,6 +169,43 @@ export function buildGrokArgs(options = {}) {
     args.push("--worktree-ref", options.worktreeRef);
   }
 
+  // Control surface (Grok Build 0.2.118+)
+  if (options.sandbox) {
+    args.push("--sandbox", options.sandbox);
+  }
+  if (options.permissionMode) {
+    args.push("--permission-mode", options.permissionMode);
+  }
+  if (options.noSubagents) {
+    args.push("--no-subagents");
+  }
+  if (options.agent) {
+    args.push("--agent", options.agent);
+  }
+  if (options.agentsJson) {
+    args.push("--agents", options.agentsJson);
+  }
+  for (const rule of options.allow || []) {
+    args.push("--allow", rule);
+  }
+  for (const rule of options.deny || []) {
+    args.push("--deny", rule);
+  }
+  if (options.disableWebSearch) {
+    args.push("--disable-web-search");
+  }
+  if (options.forkSession) {
+    args.push("--fork-session");
+  }
+  if (options.memory?.enable === true) {
+    args.push("--experimental-memory");
+  } else if (options.memory?.enable === false) {
+    args.push("--no-memory");
+  }
+  if (options.noPlan) {
+    args.push("--no-plan");
+  }
+
   // Tool gating strategy (Grok 0.2.93-safe):
   // - Prefer --disallowed-tools (denylist) over --tools (allowlist).
   // - Only pass --tools when forceToolsAllowlist is true (debug / future CLI).
@@ -153,21 +213,26 @@ export function buildGrokArgs(options = {}) {
     args.push("--tools", options.tools);
   }
 
+  const isPlanMode = options.permissionMode === "plan";
+
   if (options.disallowedTools) {
     args.push("--disallowed-tools", options.disallowedTools);
   } else if (options.media) {
     args.push("--disallowed-tools", options.mediaDisallowedTools ?? MEDIA_DISALLOWED_TOOLS);
-  } else if (options.write) {
+  } else if (options.write && !isPlanMode) {
     // Full coding agent: default toolset + auto-approve.
     if (options.yolo !== false) {
       args.push("--yolo");
     }
-  } else {
-    // Read-only review / diagnosis: strip shell + source editors.
-    args.push(
-      "--disallowed-tools",
-      options.readOnlyDisallowedTools ?? READ_ONLY_DISALLOWED_TOOLS
-    );
+  } else if (!options.write || isPlanMode) {
+    // Read-only review / diagnosis / plan mode: strip shell + source editors.
+    // Plan mode still allows plan.md via Grok's plan-mode policy.
+    if (!isPlanMode) {
+      args.push(
+        "--disallowed-tools",
+        options.readOnlyDisallowedTools ?? READ_ONLY_DISALLOWED_TOOLS
+      );
+    }
   }
 
   if (options.rules) {
@@ -229,7 +294,7 @@ export function humanizeGrokFailure(sources = {}) {
   }
 
   if (/not logged in|unauthori[sz]ed|authentication required|auth.*fail/i.test(blob)) {
-    return "Grok is not authenticated. Run `grok login` in your terminal.";
+    return "Grok is not authenticated. Run `grok login` (or `!grok login` inside Claude Code).";
   }
 
   if (/command not found|No such file or directory.*grok|Grok CLI not found/i.test(blob)) {
@@ -386,37 +451,62 @@ export function runGrok(options = {}) {
 }
 
 /**
- * Spawn Grok as a detached background process.
- * Uses streaming-json when progressFile is set so status can show live activity.
+ * Compact stream progress for /grok:status: collapse whitespace and keep a tail
+ * of accumulated tokens (not a single event).
+ *
+ * Returns "" when there is no non-whitespace content yet (even if `prefix` is
+ * set). Callers should floor empty results to `"running"` so early whitespace-
+ * only stream tokens (Grok does emit `"data":" \\n"`) do not blank status.
+ *
+ * This function's source is embedded into the background worker via
+ * {@link getStreamProgressHelperSource} / `Function.prototype.toString` so
+ * tests and the live path share one implementation (no drifted copy).
+ *
+ * @param {string} accumulated
+ * @param {{ prefix?: string, maxLen?: number }} [opts]
  */
-export function spawnGrokBackground(options = {}) {
-  const availability = getGrokAvailability();
-  if (!availability.available) {
-    throw new Error(availability.reason);
-  }
+export function formatStreamProgressMessage(accumulated, opts = {}) {
+  const prefix = opts.prefix ?? "";
+  const maxLen = opts.maxLen ?? 160;
+  const compact = String(accumulated ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // No body yet → empty. Prefix alone ("thinking: ") is not useful progress.
+  if (!compact) return "";
+  const body = compact.length > maxLen ? compact.slice(-maxLen) : compact;
+  return prefix + body;
+}
 
-  const useStreaming = Boolean(options.progressFile);
-  const args = buildGrokArgs({
-    ...options,
-    outputFormat: useStreaming ? "streaming-json" : options.outputFormat ?? "json"
-  });
-  const resultFile = options.resultFile;
-  const logFile = options.logFile;
-  const progressFile = options.progressFile || "";
-  if (!resultFile) {
-    throw new Error("resultFile is required for background runs");
-  }
+/** Source string interpolated into the background worker script. */
+export function getStreamProgressHelperSource() {
+  return formatStreamProgressMessage.toString();
+}
 
-  const wrapper = `
+/**
+ * Build the Node `-e` script that runs a detached Grok process and streams
+ * progress. Exported so tests can assert the progress helper is embedded.
+ */
+export function buildGrokBackgroundWrapperSource({
+  binary,
+  args,
+  resultFile,
+  logFile = "",
+  progressFile = "",
+  cwd = process.cwd(),
+  streaming = false
+}) {
+  // Embed the same function the module exports (not a hand-maintained copy).
+  const streamProgressHelper = getStreamProgressHelperSource();
+  return `
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const binary = ${JSON.stringify(availability.binary)};
+const binary = ${JSON.stringify(binary)};
 const args = ${JSON.stringify(args)};
 const resultFile = ${JSON.stringify(resultFile)};
 const logFile = ${JSON.stringify(logFile || "")};
 const progressFile = ${JSON.stringify(progressFile)};
-const cwd = ${JSON.stringify(options.cwd || process.cwd())};
-const streaming = ${JSON.stringify(useStreaming)};
+const cwd = ${JSON.stringify(cwd)};
+const streaming = ${JSON.stringify(streaming)};
 
 function append(line) {
   if (!logFile) return;
@@ -453,9 +543,12 @@ const child = spawn(binary, args, {
 let stdout = "";
 let stderr = "";
 let textAcc = "";
+let thoughtAcc = "";
 let sessionId = null;
 let lineCount = 0;
 let lastMessage = "running";
+
+${streamProgressHelper}
 
 function handleStreamLine(line) {
   lineCount += 1;
@@ -465,9 +558,12 @@ function handleStreamLine(line) {
     const evt = JSON.parse(trimmed);
     if (evt.type === "text" && evt.data) {
       textAcc += evt.data;
-      lastMessage = String(evt.data).replace(/\\s+/g, " ").slice(0, 120);
+      // Tail of accumulated text; floor empty so whitespace-only tokens keep "running"
+      lastMessage = formatStreamProgressMessage(textAcc, {}) || "running";
     } else if (evt.type === "thought" && evt.data) {
-      lastMessage = "thinking: " + String(evt.data).replace(/\\s+/g, " ").slice(0, 100);
+      thoughtAcc += evt.data;
+      lastMessage =
+        formatStreamProgressMessage(thoughtAcc, { prefix: "thinking: " }) || "running";
     } else if (evt.type === "end") {
       sessionId = evt.sessionId || sessionId;
       lastMessage = "finishing";
@@ -534,7 +630,11 @@ child.on("close", (code, signal) => {
     sessionId
   };
   try {
-    fs.writeFileSync(resultFile, JSON.stringify(payload, null, 2) + "\\n");
+    // Atomic write: only publish result.json when the full payload is on disk.
+    // Avoids reaper/finalize seeing a truncated mid-write file as "exists".
+    const tmp = resultFile + ".tmp." + process.pid;
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\\n");
+    fs.renameSync(tmp, resultFile);
     writeProgress({
       phase: code === 0 ? "completed" : "failed",
       message: code === 0 ? "completed" : "failed with code " + code,
@@ -548,6 +648,37 @@ child.on("close", (code, signal) => {
   process.exit(code === null ? 1 : code);
 });
 `.trim();
+}
+
+/**
+ * Spawn Grok as a detached background process.
+ * Uses streaming-json when progressFile is set so status can show live activity.
+ */
+export function spawnGrokBackground(options = {}) {
+  const availability = getGrokAvailability();
+  if (!availability.available) {
+    throw new Error(availability.reason);
+  }
+
+  const useStreaming = Boolean(options.progressFile);
+  const args = buildGrokArgs({
+    ...options,
+    outputFormat: useStreaming ? "streaming-json" : options.outputFormat ?? "json"
+  });
+  const resultFile = options.resultFile;
+  if (!resultFile) {
+    throw new Error("resultFile is required for background runs");
+  }
+
+  const wrapper = buildGrokBackgroundWrapperSource({
+    binary: availability.binary,
+    args,
+    resultFile,
+    logFile: options.logFile || "",
+    progressFile: options.progressFile || "",
+    cwd: options.cwd || process.cwd(),
+    streaming: useStreaming
+  });
 
   const child = spawn(process.execPath, ["-e", wrapper], {
     cwd: options.cwd,
