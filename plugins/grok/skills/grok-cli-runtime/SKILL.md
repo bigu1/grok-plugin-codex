@@ -10,6 +10,12 @@ Use through the Grok MCP tools. If MCP is unavailable, call the companion direct
 
 Recommended Grok CLI version: **≥ 0.2.118**.
 
+## Workspace
+
+Installed Codex plugin MCP servers start from the plugin cache. Pass `cwd` with the active project
+directory on every Grok MCP call so Grok inspects, edits, and stores artifacts in the intended
+workspace rather than the cached plugin directory. Direct companion calls can use `--cwd <path>`.
+
 ## Concurrency
 
 - **Multiple companion jobs may run at once.** There is no global single-agent lock.

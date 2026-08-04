@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { spawn } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { buildCompanionInvocation, listToolDefinitions } from "../plugins/grok/mcp/server.mjs";
+import {
+  buildCompanionInvocation,
+  listToolDefinitions,
+  resolveMcpCwd,
+  runCompanion
+} from "../plugins/grok/mcp/server.mjs";
 
 const SERVER_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -49,6 +56,26 @@ test("depth tools for plan/workflow/design/execute/babysit/document/sessions are
   ]) {
     assert.ok(names.has(name), `missing ${name}`);
   }
+});
+
+test("every MCP tool accepts an explicit workspace cwd", () => {
+  for (const tool of listToolDefinitions()) {
+    assert.ok(tool.inputSchema.properties.cwd, `${tool.name} is missing cwd`);
+  }
+});
+
+test("MCP companion calls run in the requested workspace", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "grok-mcp-workspace-"));
+  const response = await runCompanion("grok_status", { cwd: workspace, json: true });
+  const payload = JSON.parse(response.content[0].text);
+
+  assert.equal(response.isError, false);
+  assert.equal(payload.workspaceRoot, fs.realpathSync(workspace));
+});
+
+test("MCP rejects a missing workspace before spawning the companion", () => {
+  const missing = path.join(os.tmpdir(), "grok-mcp-missing-workspace");
+  assert.throws(() => resolveMcpCwd({ cwd: missing }), /Workspace directory does not exist/);
 });
 
 test("buildCompanionInvocation maps review arguments to the companion runtime", () => {
@@ -176,6 +203,7 @@ test("buildCompanionInvocation maps sessions and document tools", () => {
  * Content-Length framing must not be required or emitted.
  */
 test("stdio MCP transport speaks NDJSON (Codex framing)", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "grok-mcp-stdio-workspace-"));
   const child = spawn(process.execPath, [SERVER_PATH], {
     stdio: ["pipe", "pipe", "pipe"]
   });
@@ -207,6 +235,15 @@ test("stdio MCP transport speaks NDJSON (Codex framing)", async () => {
   });
   send({ jsonrpc: "2.0", method: "notifications/initialized" });
   send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  send({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: {
+      name: "grok_status",
+      arguments: { cwd: workspace, json: true }
+    }
+  });
 
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
@@ -224,7 +261,8 @@ test("stdio MCP transport speaks NDJSON (Codex framing)", async () => {
     }
     const init = parsed.find((m) => m.id === 1);
     const tools = parsed.find((m) => m.id === 2);
-    if (init && tools) {
+    const status = parsed.find((m) => m.id === 3);
+    if (init && tools && status) {
       child.kill();
       assert.equal(init.result?.serverInfo?.name, "grok-in-codex");
       assert.equal(init.result?.serverInfo?.version, "0.5.7");
@@ -232,6 +270,11 @@ test("stdio MCP transport speaks NDJSON (Codex framing)", async () => {
       assert.equal(tools.result.tools.length, EXPECTED_TOOLS.length);
       assert.ok(tools.result.tools.some((t) => t.name === "grok_plan"));
       assert.ok(tools.result.tools.some((t) => t.name === "grok_workflow"));
+      assert.equal(status.result?.isError, false);
+      assert.equal(
+        JSON.parse(status.result.content[0].text).workspaceRoot,
+        fs.realpathSync(workspace)
+      );
       assert.doesNotMatch(stdout, /Content-Length:/i);
       assert.equal(stderr.trim(), "");
       return;

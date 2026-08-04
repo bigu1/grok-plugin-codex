@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import readline from "node:readline";
@@ -12,6 +13,11 @@ const COMPANION = path.join(ROOT_DIR, "scripts", "grok-companion.mjs");
 const stringSchema = (description) => ({ type: "string", description });
 const booleanSchema = (description) => ({ type: "boolean", description });
 const integerSchema = (description, minimum = 1) => ({ type: "integer", minimum, description });
+const WORKSPACE_PROPERTY = {
+  cwd: stringSchema(
+    "Workspace or repository path for this call. Pass the active Codex project path when the plugin runs from its install cache."
+  )
+};
 
 /** Shared control surface for long-running Grok jobs (mirrors Claude companion flags). */
 const CONTROL_PROPERTIES = {
@@ -38,6 +44,7 @@ const CONTROL_PROPERTIES = {
 };
 
 const COMMON_JOB_PROPERTIES = {
+  ...WORKSPACE_PROPERTY,
   background: booleanSchema("Start a background job and return the job id."),
   model: stringSchema("Grok model id or alias, such as fast or deep."),
   effort: stringSchema("Reasoning effort: none, minimal, low, medium, high, xhigh, or max."),
@@ -54,6 +61,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       additionalProperties: false,
       properties: {
+        ...WORKSPACE_PROPERTY,
         enableReviewGate: booleanSchema("Enable the optional stop review gate."),
         disableReviewGate: booleanSchema("Disable the optional stop review gate."),
         json: booleanSchema("Return machine-readable JSON from the companion.")
@@ -220,6 +228,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       additionalProperties: false,
       properties: {
+        ...WORKSPACE_PROPERTY,
         action: stringSchema("list (default), search, or export."),
         query: stringSchema("Search query (for search)."),
         sessionId: stringSchema("Session id (for export)."),
@@ -236,6 +245,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       additionalProperties: false,
       properties: {
+        ...WORKSPACE_PROPERTY,
         prompt: stringSchema("Image prompt."),
         background: booleanSchema("Start a background image job and return the job id."),
         edit: stringSchema("Path to an image to edit."),
@@ -254,6 +264,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       additionalProperties: false,
       properties: {
+        ...WORKSPACE_PROPERTY,
         prompt: stringSchema("Video prompt."),
         background: booleanSchema("Start a background video job and return the job id."),
         image: stringSchema("Primary source image path."),
@@ -278,6 +289,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       additionalProperties: false,
       properties: {
+        ...WORKSPACE_PROPERTY,
         jobId: stringSchema("Specific job id to inspect."),
         all: booleanSchema("Include older jobs, not only the recent default window."),
         json: booleanSchema("Return machine-readable JSON from the companion.")
@@ -291,6 +303,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       additionalProperties: false,
       properties: {
+        ...WORKSPACE_PROPERTY,
         jobId: stringSchema("Specific job id. Omit only when there is one unambiguous recent job."),
         json: booleanSchema("Return machine-readable JSON from the companion.")
       }
@@ -304,6 +317,7 @@ const TOOL_DEFINITIONS = [
       additionalProperties: false,
       required: ["jobId"],
       properties: {
+        ...WORKSPACE_PROPERTY,
         jobId: stringSchema("Job id to cancel."),
         json: booleanSchema("Return machine-readable JSON from the companion.")
       }
@@ -316,6 +330,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       additionalProperties: false,
       properties: {
+        ...WORKSPACE_PROPERTY,
         source: stringSchema("Optional transcript/source path."),
         json: booleanSchema("Return machine-readable JSON from the companion.")
       }
@@ -327,6 +342,22 @@ const TOOL_MAP = new Map(TOOL_DEFINITIONS.map((tool) => [tool.name, tool]));
 
 function hasValue(value) {
   return value !== undefined && value !== null && value !== "";
+}
+
+export function resolveMcpCwd(input = {}) {
+  const requested = hasValue(input.cwd) ? String(input.cwd) : process.cwd();
+  const cwd = path.resolve(requested);
+
+  let stats;
+  try {
+    stats = fs.statSync(cwd);
+  } catch {
+    throw new Error(`Workspace directory does not exist: ${cwd}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Workspace path is not a directory: ${cwd}`);
+  }
+  return cwd;
 }
 
 function pushFlag(args, condition, flag) {
@@ -614,25 +645,40 @@ export function buildCompanionInvocation(toolName, input = {}) {
 
 export function runCompanion(toolName, input = {}) {
   const { args } = buildCompanionInvocation(toolName, input);
+  const cwd = resolveMcpCwd(input);
 
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [COMPANION, ...args], {
-      cwd: process.cwd(),
+      cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"]
     });
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(result);
+    };
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
+    child.on("error", (error) => {
+      finish({
+        isError: true,
+        content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }]
+      });
+    });
     child.on("close", (code, signal) => {
       const text = stdout || stderr || `grok companion exited with code ${code ?? signal}`;
-      resolve({
+      finish({
         isError: code !== 0,
         content: [{ type: "text", text }]
       });

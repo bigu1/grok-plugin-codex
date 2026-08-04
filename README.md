@@ -98,6 +98,19 @@ grok_image aspect="16:9" prompt="Dark developer-tool launch banner"
 grok_video image="./.grok-media/image/hero.png" duration="6" prompt="gentle camera push-in"
 ```
 
+### Workspace selection
+
+Codex starts an installed plugin MCP server from the plugin cache, so pass the active project
+directory as `cwd` when calling a Grok tool from an installed plugin. The companion then runs in
+that directory and keeps jobs, git inspection, and artifacts scoped to the intended workspace.
+
+For direct local calls, use for example:
+
+```text
+grok_review cwd="/path/to/project" base=main
+grok_status cwd="/path/to/project" json=true
+```
+
 ## Depth pipeline
 
 For multi-PR or ambiguous product work, prefer:
