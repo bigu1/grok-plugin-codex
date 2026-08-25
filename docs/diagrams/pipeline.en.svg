@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1148 264" width="1148" height="264" role="img" aria-labelledby="t">
+  <title id="t">Ship large work on this rail. Do not dump it into one rescue.</title>
+  <rect width="1148" height="264" rx="22" fill="#0d1117"/>
+  <rect x="1" y="1" width="1146" height="262" rx="21" fill="none" stroke="#30363d"/>
+<text x="28" y="38" text-anchor="start" fill="#c9d1d9" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="15" font-weight="500">Ship large work on this rail. Do not dump it into one rescue.</text>
+<rect x="24" y="60" width="248" height="156" rx="18" fill="#161b22" stroke="#30363d"/>
+<text x="46" y="88" text-anchor="start" fill="#d29922" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="500">01</text>
+<text x="46" y="122" text-anchor="start" fill="#e6edf3" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="22" font-weight="600">Plan</text>
+<text x="46" y="152" text-anchor="start" fill="#c9d1d9" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="13" font-weight="400">grok_plan</text>
+<text x="46" y="188" text-anchor="start" fill="#8b949e" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="400">.grok-plans/</text>
+<line x1="280" y1="138" x2="298" y2="138" stroke="#d29922" stroke-width="1.7"/>
+<polygon points="296,134 304,138 296,142" fill="#d29922"/>
+<rect x="308" y="60" width="248" height="156" rx="18" fill="#161b22" stroke="#30363d"/>
+<text x="330" y="88" text-anchor="start" fill="#d29922" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="500">02</text>
+<text x="330" y="122" text-anchor="start" fill="#e6edf3" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="22" font-weight="600">Design</text>
+<text x="330" y="152" text-anchor="start" fill="#c9d1d9" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="13" font-weight="400">grok_design</text>
+<text x="330" y="188" text-anchor="start" fill="#8b949e" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="400">.grok-designs/</text>
+<line x1="564" y1="138" x2="582" y2="138" stroke="#d29922" stroke-width="1.7"/>
+<polygon points="580,134 588,138 580,142" fill="#d29922"/>
+<rect x="592" y="60" width="248" height="156" rx="18" fill="#161b22" stroke="#30363d"/>
+<text x="614" y="88" text-anchor="start" fill="#d29922" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="500">03</text>
+<text x="614" y="122" text-anchor="start" fill="#e6edf3" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="22" font-weight="600">Execute</text>
+<text x="614" y="152" text-anchor="start" fill="#c9d1d9" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="13" font-weight="400">grok_execute_plan</text>
+<text x="614" y="188" text-anchor="start" fill="#8b949e" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="400">dry-run first</text>
+<line x1="848" y1="138" x2="866" y2="138" stroke="#d29922" stroke-width="1.7"/>
+<polygon points="864,134 872,138 864,142" fill="#d29922"/>
+<rect x="876" y="60" width="248" height="156" rx="18" fill="#161b22" stroke="#30363d"/>
+<text x="898" y="88" text-anchor="start" fill="#d29922" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="500">04</text>
+<text x="898" y="122" text-anchor="start" fill="#e6edf3" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="22" font-weight="600">Gate</text>
+<text x="898" y="152" text-anchor="start" fill="#c9d1d9" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="13" font-weight="400">review / babysit</text>
+<text x="898" y="188" text-anchor="start" fill="#8b949e" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="400">before merge</text>
+<text x="28" y="244" text-anchor="start" fill="#8b949e" font-family="ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif" font-size="12" font-weight="400">Artifacts stay in the project. Those folders are gitignored.</text>
+</svg>

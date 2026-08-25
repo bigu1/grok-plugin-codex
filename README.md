@@ -19,30 +19,12 @@
 Codex 继续当工头：你跟它说话，它拆任务、盯进度。  
 本仓库只是一层很薄的 MCP 插件，不会替换 Codex，也不是把 Grok 模型嵌进 Codex。它调用的是你本机已经装好的 `grok` CLI。
 
-```mermaid
-flowchart LR
-  You["你"] -->|"自然语言"| Codex["OpenAI Codex<br/>调度"]
-  Codex -->|"MCP grok_* 工具"| Plugin["grok-plugin-codex"]
-  Plugin -->|"本机命令"| Grok["Grok Build<br/>grok CLI"]
-  Grok --> Out["代码 · 评审 · 方案 · 文档 · 图 · 视频"]
-```
+![人把话交给 Codex，插件再把任务交给本机 Grok](docs/diagrams/architecture.zh.svg)
 
 **适合：** 想在 Codex 里再加一个能干活的第二智能体；合并前要一份结构化评审；走「方案 → 设计 → 落地」；或者要用 Grok 的图 / 视频 / 文档能力（Codex 本身没有这些）。  
 **不必用：** 一行就能改完的修复、重命名、或者根本不碰仓库的闲聊。
 
-```mermaid
-flowchart TB
-  subgraph stay["留在 Codex"]
-    A["小改动 · 重命名 · 一眼能看懂的一行修复"]
-  end
-  subgraph send["交给 Grok"]
-    B["卡住的排查"]
-    C["第二意见评审"]
-    D["架构还不清楚"]
-    E["跨多个 PR 的交付"]
-    F["图 / 视频 / PDF / PPT"]
-  end
-```
+![什么该留在 Codex，什么该交给 Grok](docs/diagrams/when.zh.svg)
 
 ---
 
@@ -64,12 +46,7 @@ flowchart TB
 
 更大的产品工作不要塞进一次巨型 rescue：
 
-```mermaid
-flowchart LR
-  P["1 grok_plan<br/>.grok-plans/"] --> D["2 grok_design<br/>.grok-designs/"]
-  D --> E["3 grok_execute_plan"]
-  E --> R["4 grok_review / grok_babysit"]
-```
+![大活按这条链路走，不要一次巨型 rescue](docs/diagrams/pipeline.zh.svg)
 
 产物会落到项目目录里（建议 gitignore）：`.grok-plans/` `.grok-designs/` `.grok-reviews/` `.grok-docs/` `.grok-media/` `.grok-workflows/`。
 

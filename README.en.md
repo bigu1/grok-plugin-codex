@@ -19,30 +19,12 @@ Not an official xAI or OpenAI product. Version **0.6.0**. Apache-2.0. Derivative
 Codex stays the **orchestrator** (you talk to it, it splits work, it watches jobs).  
 This repo is a **thin MCP plugin**: it does not replace Codex and it is not a Grok fork. It shells out to the `grok` CLI already installed on your machine.
 
-```mermaid
-flowchart LR
-  You["You"] -->|"natural language"| Codex["OpenAI Codex<br/>orchestrator"]
-  Codex -->|"MCP grok_* tools"| Plugin["grok-plugin-codex"]
-  Plugin -->|"local CLI"| Grok["Grok Build<br/>grok CLI"]
-  Grok --> Out["code · review · plan · docs · image · video"]
-```
+![You talk to Codex. The plugin hands work to local Grok.](docs/diagrams/architecture.en.svg)
 
 **Use this when** you want a second agent inside Codex, a structured review before merge, a plan → design → implement pipeline, or Grok’s image/video/docs (Codex does not have those).  
 **Skip it when** you only need one-line fixes, renames, or chat that never touches the repo.
 
-```mermaid
-flowchart TB
-  subgraph stay["Stay in Codex"]
-    A["tiny edit · rename · obvious one-liner"]
-  end
-  subgraph send["Send to Grok"]
-    B["stuck debug"]
-    C["second-opinion review"]
-    D["unclear architecture"]
-    E["multi-PR delivery"]
-    F["image / video / PDF / PPT"]
-  end
-```
+![What stays in Codex, and what should go to Grok](docs/diagrams/when.en.svg)
 
 ---
 
@@ -64,12 +46,7 @@ flowchart TB
 
 Larger product work should not be one giant rescue:
 
-```mermaid
-flowchart LR
-  P["1 grok_plan<br/>.grok-plans/"] --> D["2 grok_design<br/>.grok-designs/"]
-  D --> E["3 grok_execute_plan"]
-  E --> R["4 grok_review / grok_babysit"]
-```
+![Ship large work on this rail. Do not dump it into one rescue.](docs/diagrams/pipeline.en.svg)
 
 Artifacts land in the project (gitignore these): `.grok-plans/` `.grok-designs/` `.grok-reviews/` `.grok-docs/` `.grok-media/` `.grok-workflows/`.
 
