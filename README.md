@@ -1,71 +1,68 @@
 # grok-plugin-codex
 
-**A Codex plugin to use Grok inside OpenAI Codex.**  
-Stay in [Codex](https://github.com/openai/codex). Hand hard work to local [Grok Build](https://grok.com): code review, delegated coding, planning, design docs, PR babysitting, PDF/PPT, images, and short video.
+**中文** | [English](./README.en.md)
 
-**在 Codex 里直接用 Grok 的插件。**  
-人还是跟 Codex 说话。评审、修硬 bug、出方案、写设计、盯 PR、出文档/图/视频，交给本机 Grok Build。
+在 [Codex](https://github.com/openai/codex) 里直接用 Grok 的插件。  
+人还是跟 Codex 说话。评审、修硬 bug、出方案、写设计、盯 PR、出文档 / 图 / 视频，交给本机 [Grok Build](https://grok.com)。
 
 | | |
 |---|---|
-| **English search terms** | Codex Grok plugin · use Grok in Codex · Grok MCP for Codex · Grok Build Codex · delegate Codex tasks to Grok |
 | **中文检索词** | Codex 调用 Grok · 在 Codex 上用 Grok · Codex Grok 插件 · OpenAI Codex 用 xAI Grok · Codex MCP Grok |
+| **English search terms** | Codex Grok plugin · use Grok in Codex · Grok MCP for Codex · Grok Build Codex · delegate Codex tasks to Grok |
 
-Not an official xAI or OpenAI product. Version **0.6.0**. Apache-2.0. Derivative of [`stdevMac/grok-in-codex`](https://github.com/stdevMac/grok-in-codex).
+非 xAI / OpenAI 官方产品。当前版本 **0.6.0**。Apache-2.0。衍生自 [`stdevMac/grok-in-codex`](https://github.com/stdevMac/grok-in-codex)。
 
 ---
 
-## What it is / 这是什么
+## 这是什么
 
-Codex stays the **orchestrator** (you talk to it, it splits work, it watches jobs).  
-This repo is a **thin MCP plugin**: it does not replace Codex and it is not a Grok fork. It shells out to the `grok` CLI already installed on your machine.
-
-Codex 继续当工头。本仓库只是传话筒：通过 MCP 把任务交给本机 `grok`。不是换掉 Codex，也不是把 Grok 模型嵌进 Codex。
+Codex 继续当工头：你跟它说话，它拆任务、盯进度。  
+本仓库只是一层很薄的 MCP 插件，不会替换 Codex，也不是把 Grok 模型嵌进 Codex。它调用的是你本机已经装好的 `grok` CLI。
 
 ```mermaid
 flowchart LR
-  You["You / 你"] -->|"natural language / 自然语言"| Codex["OpenAI Codex<br/>orchestrator / 调度"]
-  Codex -->|"MCP grok_* tools"| Plugin["grok-plugin-codex"]
-  Plugin -->|"local CLI / 本机命令"| Grok["Grok Build<br/>grok CLI"]
-  Grok --> Out["code · review · plan · docs · image · video"]
+  You["你"] -->|"自然语言"| Codex["OpenAI Codex<br/>调度"]
+  Codex -->|"MCP grok_* 工具"| Plugin["grok-plugin-codex"]
+  Plugin -->|"本机命令"| Grok["Grok Build<br/>grok CLI"]
+  Grok --> Out["代码 · 评审 · 方案 · 文档 · 图 · 视频"]
 ```
 
-**Use this when / 适合：** you want a second agent inside Codex, a structured review before merge, a plan→design→implement pipeline, or Grok’s image/video/docs (Codex does not have those).  
-**Skip it when / 不必用：** one-line fixes, renames, or chat that never touches the repo.
+**适合：** 想在 Codex 里再加一个能干活的第二智能体；合并前要一份结构化评审；走「方案 → 设计 → 落地」；或者要用 Grok 的图 / 视频 / 文档能力（Codex 本身没有这些）。  
+**不必用：** 一行就能改完的修复、重命名、或者根本不碰仓库的闲聊。
 
 ```mermaid
 flowchart TB
-  subgraph stay["Stay in Codex / 留在 Codex"]
-    A["tiny edit · rename · obvious one-liner"]
+  subgraph stay["留在 Codex"]
+    A["小改动 · 重命名 · 一眼能看懂的一行修复"]
   end
-  subgraph send["Send to Grok / 交给 Grok"]
-    B["stuck debug"]
-    C["second-opinion review"]
-    D["unclear architecture"]
-    E["multi-PR delivery"]
-    F["image / video / PDF / PPT"]
+  subgraph send["交给 Grok"]
+    B["卡住的排查"]
+    C["第二意见评审"]
+    D["架构还不清楚"]
+    E["跨多个 PR 的交付"]
+    F["图 / 视频 / PDF / PPT"]
   end
 ```
 
 ---
 
-## What you can do / 能做什么
+## 能做什么
 
-| You want / 你想 | Ask Codex / 对 Codex 说 | Tool |
+| 你想 | 对 Codex 说 | 工具 |
 |---|---|---|
-| Fix or investigate | “Have Grok investigate why tests fail” | `grok_rescue` |
-| Plan only, no edits | “Use Grok to plan the auth rewrite” | `grok_plan` |
-| Design doc + PR split | “Generate a design doc with Grok” | `grok_design` |
-| Implement that design | “Execute the latest Grok plan, dry-run first” | `grok_execute_plan` |
-| Review a branch / PR | “Ask Grok to review this branch against main” | `grok_review` |
-| Challenge assumptions | “Adversarial review the billing design” | `grok_adversarial_review` |
-| Watch CI / review comments | “Babysit open PRs with Grok” | `grok_babysit` |
-| Named multi-agent recipe | “List / run a Grok workflow” | `grok_workflow` |
-| PDF / Word / PPT | “One-pager PDF for the launch” | `grok_document` |
-| Image / short video | “16:9 launch banner with Grok” | `grok_image` / `grok_video` |
-| Job board | “Show Grok job status” | `grok_status` / `grok_result` / `grok_cancel` |
+| 修问题 / 排查 | 「让 Grok 查一下测试为什么失败」 | `grok_rescue` |
+| 只出方案，不改代码 | 「用 Grok 规划一次鉴权重写」 | `grok_plan` |
+| 设计文档 + PR 拆分 | 「让 Grok 出一份设计文档」 | `grok_design` |
+| 按设计落地 | 「执行最新的 Grok 方案，先 dry-run」 | `grok_execute_plan` |
+| 评审分支 / PR | 「让 Grok 对照 main 评审这个分支」 | `grok_review` |
+| 挑战前提 | 「对计费设计做对抗式评审」 | `grok_adversarial_review` |
+| 盯 CI / Review 评论 | 「让 Grok 盯着打开的 PR」 | `grok_babysit` |
+| 命名工作流 | 「列出 / 跑一个 Grok workflow」 | `grok_workflow` |
+| PDF / Word / PPT | 「做一页发布用 PDF」 | `grok_document` |
+| 图 / 短视频 | 「用 Grok 做一张 16:9 发布 banner」 | `grok_image` / `grok_video` |
+| 任务看板 | 「看看 Grok 任务状态」 | `grok_status` / `grok_result` / `grok_cancel` |
 
-Larger product work should not be one giant rescue:
+更大的产品工作不要塞进一次巨型 rescue：
 
 ```mermaid
 flowchart LR
@@ -74,38 +71,38 @@ flowchart LR
   E --> R["4 grok_review / grok_babysit"]
 ```
 
-Artifacts land in the project (gitignore these): `.grok-plans/` `.grok-designs/` `.grok-reviews/` `.grok-docs/` `.grok-media/` `.grok-workflows/`.
+产物会落到项目目录里（建议 gitignore）：`.grok-plans/` `.grok-designs/` `.grok-reviews/` `.grok-docs/` `.grok-media/` `.grok-workflows/`。
 
 ---
 
-## Requirements / 环境
+## 环境
 
 - Node.js **18.18+**
-- [Grok Build CLI](https://grok.com) (`grok`) on `PATH`, typically `~/.grok/bin/grok`
+- [Grok Build CLI](https://grok.com)（`grok`）在 `PATH` 上，常见路径是 `~/.grok/bin/grok`
 - `grok login`
-- Grok Build **≥ 1.0.5 recommended** (0.2.118 still launches; flags are capability-gated)
-- `gh` only for PR review posting
+- 建议 Grok Build **≥ 1.0.5**（0.2.118 仍能启动；具体 flag 按能力探测开关）
+- 只有要往 PR 上发评论时才需要 `gh`
 
-This plugin does not ship a model and does not log you into Grok.
+这个插件不自带模型，也不会替你登录 Grok。
 
 ---
 
-## Install / 安装
+## 安装
 
 ```bash
 codex plugin marketplace add /path/to/grok-plugin-codex/.agents/plugins
 codex plugin add grok@grok-plugin-codex
 ```
 
-Start a **new** Codex thread so MCP tools load. Then:
+开一个**新的** Codex 会话，MCP 工具才会加载。然后：
 
 ```bash
 node plugins/grok/scripts/grok-companion.mjs setup
 ```
 
-or ask Codex to call `grok_setup`.
+或者让 Codex 调用 `grok_setup`。
 
-Codex may start the plugin from its install cache. Pass the real project path as `cwd` on every tool call so jobs and artifacts stay in that repo:
+Codex 可能会从安装缓存启动插件。每次调用工具时把真实项目路径传给 `cwd`，任务和产物才会落在那个仓库：
 
 ```text
 grok_review cwd="/path/to/project" base=main
@@ -114,20 +111,20 @@ grok_status cwd="/path/to/project" json=true
 
 ---
 
-## Quick start / 上手
+## 上手
 
-Say this in Codex:
+在 Codex 里直接说：
 
 ```text
-Ask Grok to review this branch against main.
-Use Grok to plan the auth rewrite.
-Generate a design doc with Grok, then execute the latest plan dry-run.
-Start a background Grok rescue job for the retry redesign.
-Generate a 16:9 launch banner with Grok.
-Show Grok job status.
+让 Grok 对照 main 评审这个分支。
+用 Grok 规划一次鉴权重写。
+让 Grok 出一份设计文档，然后 dry-run 执行最新方案。
+给重试重构开一个后台 Grok rescue。
+用 Grok 生成一张 16:9 发布 banner。
+看看 Grok 任务状态。
 ```
 
-MCP examples:
+MCP 示例：
 
 ```text
 grok_plan prompt="plan the auth rewrite" background=true
@@ -146,70 +143,70 @@ grok_result jobId="plan-abc123"
 
 ---
 
-## Tools / 工具一览
+## 工具一览
 
-| Tool | Purpose |
+| 工具 | 用途 |
 |---|---|
-| `grok_setup` | CLI + auth + version + doctor; optional stop-review gate |
-| `grok_rescue` | Investigation / implementation (write by default) |
-| `grok_plan` | Plan mode only → `.grok-plans/` |
-| `grok_review` | Read-only review (tree / branch / PR; optional `postPending`) |
-| `grok_adversarial_review` | Challenge design and assumptions |
-| `grok_workflow` | List/run Grok Rhai workflows |
-| `grok_design` | Design doc + PR plan → `.grok-designs/` |
-| `grok_execute_plan` | Execute a design-doc PR DAG |
-| `grok_babysit` | Watch PRs / fix CI & review comments (`list` is read-only) |
+| `grok_setup` | CLI + 登录 + 版本 + doctor；可选 stop-review 门槛 |
+| `grok_rescue` | 排查 / 落地（默认可写） |
+| `grok_plan` | 只做方案 → `.grok-plans/` |
+| `grok_review` | 只读评审（tree / 分支 / PR；可选 `postPending`） |
+| `grok_adversarial_review` | 挑战设计和前提 |
+| `grok_workflow` | 列出 / 运行 Grok Rhai workflow |
+| `grok_design` | 设计文档 + PR 计划 → `.grok-designs/` |
+| `grok_execute_plan` | 执行设计文档里的 PR DAG |
+| `grok_babysit` | 盯 PR / 修 CI 和 review 评论（`list` 是只读） |
 | `grok_document` | docx / pdf / pptx → `.grok-docs/` |
-| `grok_image` | Generate or edit images → `.grok-media/image/` |
-| `grok_video` | Short videos → `.grok-media/video/` |
-| `grok_sessions` | List / search / export Grok sessions |
-| `grok_transfer` | Context-transfer notes for Grok |
-| `grok_status` | Jobs + live progress / log tail + usage |
-| `grok_result` | Final output (plan.md preferred for plan jobs) |
-| `grok_cancel` | Cancel a background job |
+| `grok_image` | 生成或编辑图片 → `.grok-media/image/` |
+| `grok_video` | 短视频 → `.grok-media/video/` |
+| `grok_sessions` | 列出 / 搜索 / 导出 Grok 会话 |
+| `grok_transfer` | 给 Grok 的上下文交接笔记 |
+| `grok_status` | 任务 + 实时进度 / 日志尾巴 + 用量 |
+| `grok_result` | 最终输出（plan 任务优先 `plan.md`） |
+| `grok_cancel` | 取消后台任务 |
 
-**Control flags** on long jobs: `sandbox` (`workspace`, `read-only`, `strict`, `devbox`, `off`; stale alias `workspace-write` → `workspace`), `planMode` / `permissionMode`, `agent`, `noSubagents`, `memory` / `noMemory`, `allow` / `deny`, `disableWebSearch`, `forkSession`, `maxTurns`.
+长任务的**控制参数**：`sandbox`（`workspace`、`read-only`、`strict`、`devbox`、`off`；旧别名 `workspace-write` 会归一成 `workspace`），`planMode` / `permissionMode`，`agent`，`noSubagents`，`memory` / `noMemory`，`allow` / `deny`，`disableWebSearch`，`forkSession`，`maxTurns`。
 
-Aligned with **Grok CLI 1.0.x**: `--check` and `--best-of-n` are not forwarded when the CLI lacks them. `check=true` is injected into the prompt instead. Write jobs that only think/read for many turns are stopped as execution drift.
+对齐 **Grok CLI 1.0.x**：CLI 没有 `--check` / `--best-of-n` 时不会硬传。`check=true` 会写进 prompt。只想/只读很多轮却不写文件的写任务，会按执行漂移停掉。
 
 ---
 
-## Usage notes / 用法要点
+## 用法要点
 
-**Rescue** — write-capable by default. `readOnly=true` to investigate only. `worktree=true` for safer edits.
+**Rescue** — 默认可写。`readOnly=true` 只排查。`worktree=true` 改得更安全。
 
-**Plan / design / execute** — harvest into `.grok-plans/` and `.grok-designs/`. `latest=true` picks the newest design. `dryRun=true` is read-only.
+**Plan / design / execute** — 产物收到 `.grok-plans/` 和 `.grok-designs/`。`latest=true` 选最新设计。`dryRun=true` 是只读。
 
-**Review** — never applies patches. `postPending=true` + a PR posts PENDING GitHub comments when there are findings.
+**Review** — 永远不打补丁。`postPending=true` 加上 PR 后，有发现才会发 PENDING GitHub 评论。
 
-**Media** — files are copied into `.grok-media/` so the project path contract holds.
+**Media** — 文件会拷进 `.grok-media/`，保证还在项目路径契约里。
 
-**Jobs** — `background=true` returns a job id. Multiple Grok jobs may run at once. Track with `grok_status` / `grok_result` / `grok_cancel`.
+**Jobs** — `background=true` 会返回 job id。多个 Grok 任务可以同时跑。用 `grok_status` / `grok_result` / `grok_cancel` 跟踪。
 
-**CLI posture** — denylist (`--disallowed-tools`) over allowlist. Media and dry-run / validate-only / babysit `list` are read-only (no yolo). Reviews default to `--sandbox read-only` and do not strip the shell tool (Grok 1.0.x needs it for task output).
+**CLI 姿态** — 用 denylist（`--disallowed-tools`）而不是 allowlist。媒体、dry-run / validate-only、babysit `list` 都是只读（不加 yolo）。评审默认 `--sandbox read-only`，不会摘掉 shell 工具（Grok 1.0.x 产出任务结果需要它）。
 
-### Environment
+### 环境变量
 
-| Variable | Purpose |
+| 变量 | 用途 |
 |---|---|
-| `GROK_BINARY` | Override `grok` path (tests use a mock) |
-| `GROK_CODEX_PLUGIN_STATE` | Job-state root for this plugin |
-| `CODEX_PLUGIN_DATA` | Host plugin data dir; trusted only when basename is `grok` / `grok-*` |
+| `GROK_BINARY` | 覆盖 `grok` 路径（测试会用 mock） |
+| `GROK_CODEX_PLUGIN_STATE` | 本插件的任务状态根目录 |
+| `CODEX_PLUGIN_DATA` | 宿主插件数据目录；只有 basename 是 `grok` / `grok-*` 时才信任 |
 
-Default state: `~/.grok/codex-plugin/state/`. Not shared with Claude plugin state.
+默认状态目录：`~/.grok/codex-plugin/state/`。不和 Claude 插件状态共用。
 
-### Job control
+### 任务控制
 
-- No global single-job lock. Prefer `background=true` for long work.
-- Status tails text **and** thought streams; whitespace-only tokens stay `running`. Status also records last tool / whether a write tool ran.
-- Plan results prefer harvested `plan.md`. Finished jobs store `config`, `usage`, `artifacts` (v3).
-- Reaper: dead pid + complete `result.json` → completed; dead pid + truncated result → **failed** (no forever-running zombies).
-- Background `result.json` is written atomically (tmp + rename).
-- PR post-pending also runs on background completion; empty/oversize diffs fail closed and save findings under `.grok-reviews/`.
+- 没有全局单任务锁。长任务优先 `background=true`。
+- 状态会跟文本流和 thought 流；只有空白 token 时仍显示 `running`。状态还会记录最近一次工具、以及有没有跑过写工具。
+- Plan 结果优先收割 `plan.md`。完成的任务会存 `config`、`usage`、`artifacts`（v3）。
+- Reaper：pid 已死且 `result.json` 完整 → completed；pid 已死但结果被截断 → **failed**（不会永远卡在 running）。
+- 后台 `result.json` 是原子写入（tmp + rename）。
+- PR post-pending 在后台完成时也会跑；空 diff / 过大 diff 会 fail closed，发现写到 `.grok-reviews/`。
 
 ---
 
-## Development / 开发
+## 开发
 
 ```bash
 npm test
@@ -217,12 +214,12 @@ node plugins/grok/scripts/grok-companion.mjs setup --json
 node plugins/grok/mcp/server.mjs   # stdio NDJSON MCP server
 ```
 
-Keep the same version string in `package.json`, `plugins/grok/.codex-plugin/plugin.json`, and `.agents/plugins/marketplace.json`.
+`package.json`、`plugins/grok/.codex-plugin/plugin.json`、`.agents/plugins/marketplace.json` 里的版本号必须一致。
 
 ---
 
-## License / 许可
+## 许可
 
-Apache-2.0. See `LICENSE` and `NOTICE`.
+Apache-2.0。见 `LICENSE` 和 `NOTICE`。
 
-This project is a derivative of [stdevMac/grok-in-codex](https://github.com/stdevMac/grok-in-codex) by [stdevMac](https://github.com/stdevMac).
+本项目衍生自 [stdevMac](https://github.com/stdevMac) 的 [stdevMac/grok-in-codex](https://github.com/stdevMac/grok-in-codex)。
