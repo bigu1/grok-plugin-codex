@@ -18,6 +18,11 @@ test("normalizeControlOptions maps sandbox aliases", () => {
   assert.equal(c.sandbox, "read-only");
 });
 
+test("normalizeControlOptions maps workspace-write to workspace", () => {
+  const c = normalizeControlOptions({ sandbox: "workspace-write" });
+  assert.equal(c.sandbox, "workspace");
+});
+
 test("normalizeControlOptions rejects unknown sandbox", () => {
   assert.throws(() => normalizeControlOptions({ sandbox: "banana" }), /sandbox/);
 });
@@ -57,7 +62,14 @@ test("buildGrokArgs emits control surface flags", () => {
     maxTurns: 3
   });
   const args = buildGrokArgs(
-    applyControlToGrokOptions({ prompt: "hi", write: true }, control)
+    applyControlToGrokOptions(
+      {
+        prompt: "hi",
+        write: true,
+        capabilities: { experimentalMemory: true, noMemory: true, sandbox: true, yolo: true }
+      },
+      control
+    )
   );
   assert.ok(args.includes("--sandbox"));
   assert.ok(args.includes("workspace"));
@@ -81,7 +93,12 @@ test("buildGrokArgs emits control surface flags", () => {
 
 test("buildGrokArgs memory off uses --no-memory", () => {
   const control = normalizeControlOptions({ memory: false });
-  const args = buildGrokArgs(applyControlToGrokOptions({ prompt: "x", write: true }, control));
+  const args = buildGrokArgs(
+    applyControlToGrokOptions(
+      { prompt: "x", write: true, capabilities: { noMemory: true, experimentalMemory: true } },
+      control
+    )
+  );
   assert.ok(args.includes("--no-memory"));
   assert.ok(!args.includes("--experimental-memory"));
 });

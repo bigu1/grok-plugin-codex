@@ -6,7 +6,9 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const SERVER_VERSION = "0.5.8";
+import { canonicalizeSandbox, SANDBOX_PROFILES } from "../scripts/lib/control.mjs";
+
+const SERVER_VERSION = "0.6.0";
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const COMPANION = path.join(ROOT_DIR, "scripts", "grok-companion.mjs");
 
@@ -21,7 +23,12 @@ const WORKSPACE_PROPERTY = {
 
 /** Shared control surface for long-running Grok jobs (mirrors Claude companion flags). */
 const CONTROL_PROPERTIES = {
-  sandbox: stringSchema("Grok sandbox profile (e.g. read-only, workspace-write)."),
+  sandbox: {
+    type: "string",
+    enum: [...SANDBOX_PROFILES],
+    description:
+      "Grok sandbox profile. Use workspace for normal writes, read-only for reviews. workspace-write is a stale alias for workspace and is canonicalized by the companion."
+  },
   planMode: booleanSchema("Enable Grok plan mode (--plan)."),
   permissionMode: stringSchema("Permission mode passed to Grok."),
   agent: stringSchema("Grok agent name to use."),
@@ -84,8 +91,12 @@ const TOOL_DEFINITIONS = [
         worktree: booleanSchema("Run edits in a Grok-managed git worktree."),
         worktreeName: stringSchema("Name for a Grok-managed git worktree."),
         worktreeRef: stringSchema("Base ref for the Grok worktree."),
-        check: booleanSchema("Ask Grok to verify its own work before returning."),
-        bestOfN: integerSchema("Run N parallel attempts of the same task and keep the best."),
+        check: booleanSchema(
+          "Ask Grok to verify with tests/build before returning. Injected into the prompt; not forwarded as --check unless this CLI supports that flag."
+        ),
+        bestOfN: integerSchema(
+          "Run N parallel attempts. Errors on Grok CLI versions that lack --best-of-n (including 1.0.x)."
+        ),
         verbatim: booleanSchema("Avoid adding extra wrapper instructions to the prompt."),
         ...COMMON_JOB_PROPERTIES
       }
@@ -384,7 +395,9 @@ function pushArray(args, values, flag) {
 }
 
 function appendControlArgs(args, input) {
-  pushValue(args, input.sandbox, "--sandbox");
+  if (hasValue(input.sandbox)) {
+    pushValue(args, canonicalizeSandbox(input.sandbox), "--sandbox");
+  }
   pushFlag(args, input.planMode, "--plan");
   pushValue(args, input.permissionMode, "--permission-mode");
   pushValue(args, input.agent, "--agent");
@@ -707,7 +720,7 @@ async function handleRequest(message) {
           result: {
             protocolVersion: message.params?.protocolVersion || "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "grok-in-codex", version: SERVER_VERSION }
+            serverInfo: { name: "grok-plugin-codex", version: SERVER_VERSION }
           }
         };
       case "tools/list":

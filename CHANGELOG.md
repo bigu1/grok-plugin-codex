@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+### Changed
+- Renamed the project to **grok-plugin-codex**. This tree is a derivative of [stdevMac/grok-in-codex](https://github.com/stdevMac/grok-in-codex) (Apache-2.0).
+- Aligned the adapter with **Grok CLI 1.0.5**: capability probing from `grok --help`, no unconditional `--check` / `--best-of-n`.
+- `sandbox: "workspace-write"` canonicalizes to `workspace`. MCP schema lists built-in profiles only.
+- Read-only / media denylist no longer removes the shell tool (Grok 1.0.x `kill`/`get-output` depend on it). Editors are denylisted; reviews default to `--sandbox read-only`.
+- `check:true` is injected into the prompt when the CLI lacks `--check`.
+- Write jobs abort after 8 model `usage` turns with no `write` / `search_replace` tool calls (execution-drift guard).
+
+### Tests
+- Added help-text capability unit tests, live CLI clap smoke tests (no `-p`), and stall-guard tests.
+
 ## 0.5.8
 
 ### Fixed

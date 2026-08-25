@@ -1,9 +1,31 @@
-const SANDBOX = new Set(["off", "workspace", "read-only", "strict", "devbox"]);
+export const SANDBOX_PROFILES = ["off", "workspace", "read-only", "strict", "devbox"];
+const SANDBOX = new Set(SANDBOX_PROFILES);
 const SANDBOX_ALIAS = new Map([
   ["ro", "read-only"],
   ["readonly", "read-only"],
-  ["ws", "workspace"]
+  ["ws", "workspace"],
+  ["workspace-write", "workspace"],
+  ["ws-write", "workspace"]
 ]);
+
+/**
+ * Map user/MCP sandbox names onto built-in Grok profiles.
+ * `workspace-write` is a stale Codex/Claude alias for `workspace`.
+ */
+export function canonicalizeSandbox(value) {
+  if (value == null || value === false || value === "") {
+    return null;
+  }
+  let s = String(value).trim().toLowerCase();
+  s = SANDBOX_ALIAS.get(s) || s;
+  if (s === "true") {
+    s = "workspace";
+  }
+  if (!SANDBOX.has(s)) {
+    throw new Error(`Invalid --sandbox: ${value}. Expected one of ${[...SANDBOX].join(", ")}`);
+  }
+  return s === "off" ? null : s;
+}
 const PERMISSION_MODES = new Set([
   "default",
   "acceptEdits",
@@ -57,17 +79,7 @@ export function normalizeControlOptions(raw = {}) {
   };
 
   if (raw.sandbox != null && raw.sandbox !== false && raw.sandbox !== "") {
-    let s = String(raw.sandbox).trim().toLowerCase();
-    s = SANDBOX_ALIAS.get(s) || s;
-    if (s === "true") {
-      s = "workspace";
-    }
-    if (!SANDBOX.has(s)) {
-      throw new Error(
-        `Invalid --sandbox: ${raw.sandbox}. Expected one of ${[...SANDBOX].join(", ")}`
-      );
-    }
-    out.sandbox = s === "off" ? null : s;
+    out.sandbox = canonicalizeSandbox(raw.sandbox);
   }
 
   const pmRaw = raw.permissionMode ?? raw["permission-mode"];
@@ -236,4 +248,4 @@ export function parseSemver(version) {
 }
 
 export const MIN_GROK_VERSION = "0.2.118";
-export const RECOMMENDED_GROK_VERSION = "0.2.118";
+export const RECOMMENDED_GROK_VERSION = "1.0.5";

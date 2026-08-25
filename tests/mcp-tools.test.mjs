@@ -125,7 +125,7 @@ test("buildCompanionInvocation maps rescue aliases, control flags, and flags", (
     "--best-of-n",
     "3",
     "--sandbox",
-    "workspace-write",
+    "workspace",
     "--no-subagents",
     "--max-turns",
     "40",
@@ -264,8 +264,8 @@ test("stdio MCP transport speaks NDJSON (Codex framing)", async () => {
     const status = parsed.find((m) => m.id === 3);
     if (init && tools && status) {
       child.kill();
-      assert.equal(init.result?.serverInfo?.name, "grok-in-codex");
-      assert.equal(init.result?.serverInfo?.version, "0.5.8");
+      assert.equal(init.result?.serverInfo?.name, "grok-plugin-codex");
+      assert.equal(init.result?.serverInfo?.version, "0.6.0");
       assert.ok(Array.isArray(tools.result?.tools));
       assert.equal(tools.result.tools.length, EXPECTED_TOOLS.length);
       assert.ok(tools.result.tools.some((t) => t.name === "grok_plan"));

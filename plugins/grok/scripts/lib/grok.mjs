@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
+import { DEFAULT_CAPABILITIES } from "./cli-capabilities.mjs";
 import { binaryAvailable, runCommand } from "./process.mjs";
 
 // Grok CLI 0.2.93: --tools ALLOWLISTS often fail session create with a
@@ -10,10 +11,20 @@ import { binaryAvailable, runCommand } from "./process.mjs";
 // the default toolset + --disallowed-tools denylist instead.
 // Also avoid --yolo for media: the permission classifier may deny that flag;
 // single-prompt mode already auto-approves tools when the user config allows.
-export const READ_ONLY_DISALLOWED_TOOLS =
-  "run_terminal_cmd,search_replace,write_file,edit_file";
-export const MEDIA_DISALLOWED_TOOLS =
-  "run_terminal_cmd,write_file,edit_file,search_replace";
+//
+// Grok 1.0.x still loads kill/get-output tools that require a background-capable
+// shell. Do not denylist run_terminal_cmd / run_terminal_command — kernel
+// sandbox + editor denylist is the read-only posture.
+export const READ_ONLY_DISALLOWED_TOOLS = "write,write_file,edit_file,search_replace";
+export const MEDIA_DISALLOWED_TOOLS = "write,write_file,edit_file,search_replace";
+
+export const MUTATING_TOOLS = ["write", "write_file", "edit_file", "search_replace"];
+export const EXECUTION_DRIFT_MESSAGE =
+  "代理执行漂移：写入任务持续勘察/思考但没有调用写入工具";
+export const DEFAULT_STALL_USAGE_LIMIT = 8;
+
+export const CHECK_PROMPT_APPENDIX =
+  "\n\nBefore returning, run the project's tests or build and report the results. Do not claim success without verification.";
 
 // Deprecated: kept only for tests / callers that still pass tools= explicitly.
 export const READ_ONLY_TOOLS = "read_file,grep,list_dir";
@@ -118,8 +129,23 @@ export function getGrokAuthStatus() {
   };
 }
 
+export function resolveGrokCapabilities(options = {}) {
+  return options.capabilities || DEFAULT_CAPABILITIES;
+}
+
+export function grokEnvForMemory(options = {}) {
+  if (options.memory?.enable === true) {
+    return { GROK_MEMORY: "1" };
+  }
+  if (options.memory?.enable === false) {
+    return { GROK_MEMORY: "0" };
+  }
+  return {};
+}
+
 export function buildGrokArgs(options = {}) {
   const args = [];
+  const caps = resolveGrokCapabilities(options);
 
   if (options.promptFile) {
     args.push("--prompt-file", options.promptFile);
@@ -153,25 +179,34 @@ export function buildGrokArgs(options = {}) {
     args.push("--max-turns", String(options.maxTurns));
   }
   if (options.bestOfN && Number(options.bestOfN) > 1) {
+    if (!caps.bestOfN) {
+      throw new Error(
+        `This Grok CLI${caps.version ? ` (${caps.version})` : ""} does not support --best-of-n. Omit bestOfN or upgrade the CLI.`
+      );
+    }
     args.push("--best-of-n", String(options.bestOfN));
   }
-  if (options.check) {
+  if (options.check && caps.check) {
     args.push("--check");
   }
-  if (options.worktree) {
+  if (options.worktree && caps.worktree !== false) {
     if (typeof options.worktree === "string" && options.worktree !== "true") {
       args.push("--worktree", options.worktree);
     } else {
       args.push("--worktree");
     }
   }
-  if (options.worktreeRef) {
+  if (options.worktreeRef && caps.worktreeRef !== false) {
     args.push("--worktree-ref", options.worktreeRef);
   }
 
-  // Control surface (Grok Build 0.2.118+)
-  if (options.sandbox) {
-    args.push("--sandbox", options.sandbox);
+  const isPlanMode = options.permissionMode === "plan";
+  let sandbox = options.sandbox;
+  if (!sandbox && !options.write && !options.media) {
+    sandbox = "read-only";
+  }
+  if (sandbox && caps.sandbox !== false) {
+    args.push("--sandbox", sandbox);
   }
   if (options.permissionMode) {
     args.push("--permission-mode", options.permissionMode);
@@ -197,9 +232,9 @@ export function buildGrokArgs(options = {}) {
   if (options.forkSession) {
     args.push("--fork-session");
   }
-  if (options.memory?.enable === true) {
+  if (options.memory?.enable === true && caps.experimentalMemory) {
     args.push("--experimental-memory");
-  } else if (options.memory?.enable === false) {
+  } else if (options.memory?.enable === false && caps.noMemory) {
     args.push("--no-memory");
   }
   if (options.noPlan) {
@@ -213,8 +248,6 @@ export function buildGrokArgs(options = {}) {
     args.push("--tools", options.tools);
   }
 
-  const isPlanMode = options.permissionMode === "plan";
-
   if (options.disallowedTools) {
     args.push("--disallowed-tools", options.disallowedTools);
   } else if (options.media) {
@@ -225,7 +258,8 @@ export function buildGrokArgs(options = {}) {
       args.push("--yolo");
     }
   } else if (!options.write || isPlanMode) {
-    // Read-only review / diagnosis / plan mode: strip shell + source editors.
+    // Read-only review / diagnosis: denylist editors only. Keep shell so
+    // kill/get-output tools still satisfy Grok 1.0.x session requirements.
     // Plan mode still allows plan.md via Grok's plan-mode policy.
     if (!isPlanMode) {
       args.push(
@@ -291,6 +325,17 @@ export function humanizeGrokFailure(sources = {}) {
       `Grok CLI requirement error: ${brief}. ` +
       "Check `grok version`, auth (`grok login`), and that your plan supports this feature."
     );
+  }
+
+  if (/unexpected argument '--check'/i.test(blob)) {
+    return (
+      "This Grok CLI does not support --check. The plugin no longer forwards that flag; " +
+      "retry with the updated companion so verification is requested in the prompt instead."
+    );
+  }
+
+  if (/unexpected argument '--best-of-n'/i.test(blob)) {
+    return "This Grok CLI does not support --best-of-n. Omit bestOfN and retry.";
   }
 
   if (/not logged in|unauthori[sz]ed|authentication required|auth.*fail/i.test(blob)) {
@@ -419,6 +464,7 @@ export function runGrok(options = {}) {
     maxBuffer: options.maxBuffer ?? 40 * 1024 * 1024,
     env: {
       ...process.env,
+      ...grokEnvForMemory(options),
       ...(options.env ?? {}),
       RUST_LOG: options.rustLog ?? process.env.RUST_LOG ?? "off"
     }
@@ -448,6 +494,63 @@ export function runGrok(options = {}) {
     parsed,
     ok
   };
+}
+
+/** Self-contained so Function.prototype.toString embeds a working copy. */
+export function isMutatingToolName(name) {
+  const n = String(name || "").toLowerCase();
+  return n === "write" || n === "write_file" || n === "edit_file" || n === "search_replace";
+}
+
+export function createStallGuardState(options = {}) {
+  return {
+    enabled: Boolean(options.enabled),
+    limit: Number(options.limit) > 0 ? Number(options.limit) : 8,
+    usageWithoutMutating: 0,
+    mutatingToolSeen: false,
+    lastTool: null,
+    lastToolKind: null
+  };
+}
+
+/**
+ * Advance stall-guard state from one streaming-json event.
+ * Aborts write jobs after `limit` usage (model-turn) events with no mutating tools.
+ */
+export function applyStreamEventToStallGuard(state, evt) {
+  if (!state || !state.enabled || !evt || typeof evt !== "object") {
+    return { ...state, abort: false };
+  }
+  const next = { ...state, abort: false };
+  if (evt.type === "tool_call") {
+    const name = evt.toolName || evt.title || "";
+    next.lastTool = name || next.lastTool;
+    next.lastToolKind = evt.kind || next.lastToolKind;
+    if (isMutatingToolName(name)) {
+      next.mutatingToolSeen = true;
+      next.usageWithoutMutating = 0;
+    }
+    return next;
+  }
+  if (evt.type === "usage") {
+    if (next.mutatingToolSeen) {
+      return next;
+    }
+    next.usageWithoutMutating = (next.usageWithoutMutating || 0) + 1;
+    if (next.usageWithoutMutating >= next.limit) {
+      next.abort = true;
+    }
+    return next;
+  }
+  return next;
+}
+
+export function getStallGuardHelperSource() {
+  return [
+    isMutatingToolName.toString(),
+    createStallGuardState.toString(),
+    applyStreamEventToStallGuard.toString()
+  ].join("\n");
 }
 
 /**
@@ -493,10 +596,16 @@ export function buildGrokBackgroundWrapperSource({
   logFile = "",
   progressFile = "",
   cwd = process.cwd(),
-  streaming = false
+  streaming = false,
+  extraEnv = {},
+  stallGuard = null
 }) {
   // Embed the same function the module exports (not a hand-maintained copy).
   const streamProgressHelper = getStreamProgressHelperSource();
+  const stallGuardHelper = getStallGuardHelperSource();
+  const stallEnabled = Boolean(stallGuard?.enabled);
+  const stallLimit = Number(stallGuard?.limit) > 0 ? Number(stallGuard.limit) : 8;
+  const driftMessage = EXECUTION_DRIFT_MESSAGE;
   return `
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -507,6 +616,10 @@ const logFile = ${JSON.stringify(logFile || "")};
 const progressFile = ${JSON.stringify(progressFile)};
 const cwd = ${JSON.stringify(cwd)};
 const streaming = ${JSON.stringify(streaming)};
+const extraEnv = ${JSON.stringify(extraEnv || {})};
+const stallEnabled = ${JSON.stringify(stallEnabled)};
+const stallLimit = ${JSON.stringify(stallLimit)};
+const driftMessage = ${JSON.stringify(driftMessage)};
 
 function append(line) {
   if (!logFile) return;
@@ -536,7 +649,7 @@ writeProgress({ phase: "starting", message: "Launching Grok", lines: 0 });
 
 const child = spawn(binary, args, {
   cwd,
-  env: { ...process.env, RUST_LOG: process.env.RUST_LOG || "off" },
+  env: { ...process.env, ...extraEnv, RUST_LOG: process.env.RUST_LOG || "off" },
   stdio: ["ignore", "pipe", "pipe"]
 });
 
@@ -547,8 +660,12 @@ let thoughtAcc = "";
 let sessionId = null;
 let lineCount = 0;
 let lastMessage = "running";
+let stallAborted = false;
 
 ${streamProgressHelper}
+${stallGuardHelper}
+
+let stallState = createStallGuardState({ enabled: stallEnabled, limit: stallLimit });
 
 function handleStreamLine(line) {
   lineCount += 1;
@@ -556,14 +673,16 @@ function handleStreamLine(line) {
   if (!trimmed) return;
   try {
     const evt = JSON.parse(trimmed);
+    stallState = applyStreamEventToStallGuard(stallState, evt);
     if (evt.type === "text" && evt.data) {
       textAcc += evt.data;
-      // Tail of accumulated text; floor empty so whitespace-only tokens keep "running"
       lastMessage = formatStreamProgressMessage(textAcc, {}) || "running";
     } else if (evt.type === "thought" && evt.data) {
       thoughtAcc += evt.data;
       lastMessage =
         formatStreamProgressMessage(thoughtAcc, { prefix: "thinking: " }) || "running";
+    } else if (evt.type === "tool_call") {
+      lastMessage = "tool: " + (evt.toolName || evt.title || "unknown");
     } else if (evt.type === "end") {
       sessionId = evt.sessionId || sessionId;
       lastMessage = "finishing";
@@ -571,15 +690,32 @@ function handleStreamLine(line) {
       lastMessage = evt.message || "error";
     }
     if (evt.sessionId) sessionId = evt.sessionId;
+    if (stallState.abort && !stallAborted) {
+      stallAborted = true;
+      lastMessage = driftMessage;
+      writeProgress({
+        phase: "failed",
+        message: driftMessage,
+        lines: lineCount,
+        sessionId,
+        lastTool: stallState.lastTool || null,
+        mutatingToolSeen: Boolean(stallState.mutatingToolSeen),
+        usageWithoutMutating: stallState.usageWithoutMutating
+      });
+      append("Stall guard: " + driftMessage);
+      try { child.kill("SIGTERM"); } catch {}
+    }
   } catch {
     lastMessage = trimmed.slice(0, 120);
   }
-  if (lineCount % 3 === 0 || /end|error/i.test(trimmed)) {
+  if (lineCount % 3 === 0 || /end|error/i.test(trimmed) || stallAborted) {
     writeProgress({
-      phase: "running",
+      phase: stallAborted ? "failed" : "running",
       message: lastMessage,
       lines: lineCount,
-      sessionId
+      sessionId,
+      lastTool: stallState.lastTool || null,
+      mutatingToolSeen: Boolean(stallState.mutatingToolSeen)
     });
   }
 }
@@ -611,8 +747,14 @@ child.on("close", (code, signal) => {
   }
 
   let finalStdout = stdout;
-  if (streaming) {
-    // Reconstruct a json-format-like payload for the companion parser.
+  const failed = stallAborted || code !== 0;
+  if (stallAborted) {
+    finalStdout = JSON.stringify({
+      type: "error",
+      message: driftMessage,
+      sessionId
+    });
+  } else if (streaming) {
     finalStdout = JSON.stringify({
       text: textAcc || stdout,
       stopReason: code === 0 ? "EndTurn" : "Error",
@@ -622,7 +764,7 @@ child.on("close", (code, signal) => {
   }
 
   const payload = {
-    exitCode: code,
+    exitCode: stallAborted ? 1 : code,
     signal,
     stdout: finalStdout,
     stderr,
@@ -636,16 +778,18 @@ child.on("close", (code, signal) => {
     fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\\n");
     fs.renameSync(tmp, resultFile);
     writeProgress({
-      phase: code === 0 ? "completed" : "failed",
-      message: code === 0 ? "completed" : "failed with code " + code,
+      phase: failed ? "failed" : "completed",
+      message: stallAborted ? driftMessage : failed ? "failed with code " + code : "completed",
       lines: lineCount,
-      sessionId
+      sessionId,
+      lastTool: stallState.lastTool || null,
+      mutatingToolSeen: Boolean(stallState.mutatingToolSeen)
     });
-    append("Finished with code " + code);
+    append("Finished with code " + (stallAborted ? 1 : code));
   } catch (error) {
     append("Failed to write result: " + error.message);
   }
-  process.exit(code === null ? 1 : code);
+  process.exit(stallAborted ? 1 : code === null ? 1 : code);
 });
 `.trim();
 }
@@ -661,6 +805,13 @@ export function spawnGrokBackground(options = {}) {
   }
 
   const useStreaming = Boolean(options.progressFile);
+  const extraEnv = {
+    ...grokEnvForMemory(options),
+    ...(options.env ?? {})
+  };
+  const stallGuard =
+    options.stallGuard ??
+    (options.write && !options.media ? { enabled: true, limit: DEFAULT_STALL_USAGE_LIMIT } : { enabled: false });
   const args = buildGrokArgs({
     ...options,
     outputFormat: useStreaming ? "streaming-json" : options.outputFormat ?? "json"
@@ -677,14 +828,16 @@ export function spawnGrokBackground(options = {}) {
     logFile: options.logFile || "",
     progressFile: options.progressFile || "",
     cwd: options.cwd || process.cwd(),
-    streaming: useStreaming
+    streaming: useStreaming,
+    extraEnv,
+    stallGuard
   });
 
   const child = spawn(process.execPath, ["-e", wrapper], {
     cwd: options.cwd,
     detached: true,
     stdio: "ignore",
-    env: process.env
+    env: { ...process.env, ...extraEnv }
   });
   child.unref();
   return { pid: child.pid, binary: availability.binary, args };

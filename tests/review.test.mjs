@@ -35,14 +35,15 @@ test("tryParseStructuredReview parses fenced JSON", () => {
   assert.equal(reviewHasBlockingFindings(review), true);
 });
 
-test("buildGrokArgs supports best-of-n check worktree schema", () => {
+test("buildGrokArgs supports best-of-n check worktree schema when CLI has those flags", () => {
   const args = buildGrokArgs({
     prompt: "fix it",
     write: true,
     bestOfN: 3,
     check: true,
     worktree: "rescue-1",
-    jsonSchema: '{"type":"object"}'
+    jsonSchema: '{"type":"object"}',
+    capabilities: { check: true, bestOfN: true, worktree: true, yolo: true }
   });
   assert.ok(args.includes("--best-of-n"));
   assert.ok(args.includes("3"));
@@ -51,6 +52,29 @@ test("buildGrokArgs supports best-of-n check worktree schema", () => {
   assert.ok(args.includes("rescue-1"));
   assert.ok(args.includes("--json-schema"));
   assert.ok(args.includes("--yolo"));
+});
+
+test("buildGrokArgs omits --check when CLI lacks the flag", () => {
+  const args = buildGrokArgs({
+    prompt: "fix it",
+    write: true,
+    check: true,
+    capabilities: { check: false, yolo: true }
+  });
+  assert.ok(!args.includes("--check"));
+});
+
+test("buildGrokArgs rejects bestOfN when CLI lacks --best-of-n", () => {
+  assert.throws(
+    () =>
+      buildGrokArgs({
+        prompt: "fix it",
+        write: true,
+        bestOfN: 3,
+        capabilities: { bestOfN: false, yolo: true }
+      }),
+    /best-of-n/
+  );
 });
 
 test("buildGrokArgs media mode uses denylist without yolo", () => {

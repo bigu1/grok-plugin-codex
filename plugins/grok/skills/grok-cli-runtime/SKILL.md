@@ -8,7 +8,7 @@ user-invocable: false
 
 Use through the Grok MCP tools. If MCP is unavailable, call the companion directly with `node plugins/grok/scripts/grok-companion.mjs <command> ...`.
 
-Recommended Grok CLI version: **≥ 0.2.118**.
+Recommended Grok CLI version: **≥ 1.0.5** (minimum still 0.2.118; flags are capability-gated).
 
 ## Workspace
 
@@ -69,7 +69,7 @@ MCP input keys map to companion flags:
 - Map `fast` → `--model grok-composer-2.5-fast`
 - Map `deep` → `--model grok-4.5 --effort high`
 - `resume` → `--resume-last`; `resumeSession` → resume that id; `fresh` → no resume
-- Pass `worktree`, `check`, `bestOfN` through when present
+- Pass `worktree` through when present. `check` is prompt-injected unless the CLI advertises `--check`. `bestOfN` errors if the CLI lacks `--best-of-n`.
 - Default write-capable; `readOnly` only when requested
 
 ## Plan (`grok_plan`)

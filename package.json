@@ -1,8 +1,8 @@
 {
-  "name": "grok-in-codex",
-  "version": "0.5.8",
+  "name": "grok-plugin-codex",
+  "version": "0.6.0",
   "private": true,
-  "description": "Codex plugin for orchestrating Grok Build (rescue, plan, design, workflows, reviews, media, docs)",
+  "description": "Codex plugin to use Grok inside OpenAI Codex. 在 Codex 里直接调用 Grok 的插件。",
   "type": "module",
   "engines": {
     "node": ">=18.18"
@@ -13,13 +13,14 @@
     "setup": "node plugins/grok/scripts/grok-companion.mjs setup",
     "test": "node --test tests/*.test.mjs"
   },
+  "author": "Biguard",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stdevMac/grok-in-codex.git"
+    "url": "git+https://github.com/bigu1/grok-plugin-codex.git"
   },
   "bugs": {
-    "url": "https://github.com/stdevMac/grok-in-codex/issues"
+    "url": "https://github.com/bigu1/grok-plugin-codex/issues"
   },
-  "homepage": "https://github.com/stdevMac/grok-in-codex#readme",
+  "homepage": "https://github.com/bigu1/grok-plugin-codex#readme",
   "license": "Apache-2.0"
 }

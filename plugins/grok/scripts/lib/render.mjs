@@ -46,6 +46,18 @@ export function renderSetupReport(payload) {
   } else if (payload.versionOk) {
     lines.push(`- **Version floor**: ok (≥ ${payload.minVersion || "0.2.118"})`);
   }
+  if (payload.recommendedVersion) {
+    lines.push(`- **Recommended CLI**: ${payload.recommendedVersion}+`);
+  }
+  if (payload.capabilities) {
+    const unsupported = payload.capabilities.unsupported || [];
+    lines.push(
+      `- **CLI flags omitted**: ${unsupported.length ? unsupported.join(", ") : "none"}`
+    );
+    if (payload.capabilities.sandboxProfiles?.length) {
+      lines.push(`- **Sandbox profiles**: ${payload.capabilities.sandboxProfiles.join(", ")}`);
+    }
+  }
   lines.push(`- **Auth**: ${payload.authenticated ? "ok" : "not ready"}`);
   if (payload.authDetail) {
     lines.push(`- **Auth detail**: ${payload.authDetail}`);
@@ -217,7 +229,13 @@ export function renderTaskResult(payload) {
   if (payload.worktree) {
     lines.push(`- **Worktree**: enabled`);
   }
-  if (payload.check) {
+  if (payload.selfCheck) {
+    lines.push(
+      payload.selfCheck === "prompted"
+        ? "- **Self-check**: prompted (CLI has no --check)"
+        : `- **Self-check**: ${payload.selfCheck}`
+    );
+  } else if (payload.check) {
     lines.push(`- **Self-check**: enabled`);
   }
   if (payload.grokSessionId) {
@@ -313,6 +331,12 @@ export function renderStatusReport(jobs, options = {}) {
     }
     if (job.progress?.message) {
       lines.push(`- **Progress**: ${job.progress.message}`);
+    }
+    if (job.progress?.lastTool) {
+      lines.push(`- **Last tool**: ${job.progress.lastTool}`);
+    }
+    if (job.progress?.mutatingToolSeen != null) {
+      lines.push(`- **Write tool seen**: ${job.progress.mutatingToolSeen ? "yes" : "no"}`);
     }
     if (job.grokSessionId) {
       lines.push(`- **Grok session**: \`${job.grokSessionId}\``);

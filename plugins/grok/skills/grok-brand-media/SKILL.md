@@ -19,7 +19,7 @@ Use with `grok_image` and `grok_video` (or companion `image` / `video` commands)
 
 ### README / GitHub social banner (16:9)
 ```text
-grok_image aspect=16:9 prompt="Dark developer-tool banner for Grok in Codex. Minimal typography, abstract node graph, high contrast, no cluttered UI chrome, space for title text on the left."
+grok_image aspect=16:9 prompt="Dark developer-tool banner for grok-plugin-codex. Minimal typography, abstract node graph, high contrast, no cluttered UI chrome, space for title text on the left."
 ```
 
 ### OG / link preview (1.91:1-ish → use 16:9)

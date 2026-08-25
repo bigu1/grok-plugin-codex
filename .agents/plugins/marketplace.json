@@ -1,7 +1,7 @@
 {
-  "name": "grok-in-codex",
+  "name": "grok-plugin-codex",
   "interface": {
-    "displayName": "Grok in Codex"
+    "displayName": "Grok Plugin Codex"
   },
   "plugins": [
     {
@@ -15,8 +15,8 @@
         "authentication": "ON_INSTALL"
       },
       "category": "Developer Tools",
-      "version": "0.5.8"
+      "version": "0.6.0"
     }
   ],
-  "version": "0.5.8"
+  "version": "0.6.0"
 }

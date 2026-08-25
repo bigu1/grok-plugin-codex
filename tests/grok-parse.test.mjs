@@ -42,7 +42,11 @@ test("buildGrokArgs read-only mode uses denylist not allowlist", () => {
   assert.ok(!args.includes("--yolo"));
   assert.ok(!args.includes("--tools"));
   assert.ok(args.includes("--disallowed-tools"));
-  assert.ok(args.some((a) => String(a).includes("run_terminal_cmd")));
+  assert.ok(args.some((a) => String(a).includes("search_replace")));
+  assert.ok(args.some((a) => String(a).includes("write")));
+  assert.ok(!args.some((a) => /run_terminal_cmd|run_terminal_command/.test(String(a))));
+  assert.ok(args.includes("--sandbox"));
+  assert.ok(args.includes("read-only"));
   assert.ok(args.includes("--rules"));
 });
 
@@ -56,7 +60,8 @@ test("buildGrokArgs media mode avoids tools allowlist and yolo", () => {
   assert.ok(!args.includes("--tools"));
   assert.ok(!args.includes("--yolo"));
   assert.ok(args.includes("--disallowed-tools"));
-  assert.ok(args.some((a) => String(a).includes("run_terminal_cmd")));
+  assert.ok(args.some((a) => String(a).includes("search_replace")));
+  assert.ok(!args.some((a) => /run_terminal_cmd|run_terminal_command/.test(String(a))));
 });
 
 test("humanizeGrokFailure maps RequirementError tool dumps", () => {

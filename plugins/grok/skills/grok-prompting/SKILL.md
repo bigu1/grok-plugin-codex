@@ -13,7 +13,7 @@ Reshape a rescue request into a tighter prompt before the single `task` call.
 1. **Goal** — one sentence
 2. **Context** — what failed / what matters
 3. **Constraints** — no drive-by refactors, test expectations, worktree if requested
-4. **Done when** — measurable checks (`--check` helps)
+4. **Done when** — measurable checks (ask Grok to run tests; do not pass `--check` unless the CLI lists that flag)
 
 ## Do
 

@@ -22,15 +22,18 @@ import {
   CONTROL_BOOLEAN_OPTIONS,
   CONTROL_VALUE_OPTIONS,
   MIN_GROK_VERSION,
+  RECOMMENDED_GROK_VERSION,
   applyControlToGrokOptions,
   compareSemver,
   controlFromParsedOptions,
   controlToJobConfig
 } from "./lib/control.mjs";
+import { DEFAULT_CAPABILITIES, detectCliCapabilities } from "./lib/cli-capabilities.mjs";
 import { buildDesignPrompt, buildExecutePlanPrompt, buildPlanModePrompt } from "./lib/design.mjs";
 import { buildDocumentPrompt, normalizeDocumentType } from "./lib/documents.mjs";
 import { collectStopGateContext, resolveReviewTarget } from "./lib/git.mjs";
 import {
+  CHECK_PROMPT_APPENDIX,
   getGrokAuthStatus,
   getGrokAvailability,
   humanizeGrokFailure,
@@ -207,6 +210,23 @@ function titleFromPrompt(prompt, fallback = "Grok task") {
     return fallback;
   }
   return compact.length > 72 ? `${compact.slice(0, 71)}…` : compact;
+}
+
+function loadCliCapabilities() {
+  const availability = getGrokAvailability();
+  if (!availability.available) {
+    return {
+      ...DEFAULT_CAPABILITIES,
+      available: false,
+      binary: null,
+      version: null,
+      unsupported: ["--check", "--best-of-n"]
+    };
+  }
+  return detectCliCapabilities({
+    binary: availability.binary,
+    version: availability.version
+  });
 }
 
 function writePromptFile(content) {
@@ -550,6 +570,14 @@ function createJobShell(cwd, { kind, title, prompt, write, model, effort, extras
 }
 
 function runOrBackground(cwd, job, grokOptions, { background, json, renderPayload }) {
+  const capabilities = grokOptions.capabilities || loadCliCapabilities();
+  if (grokOptions.bestOfN && Number(grokOptions.bestOfN) > 1 && !capabilities.bestOfN) {
+    throw new Error(
+      `This Grok CLI (${capabilities.version || "unknown"}) does not support --best-of-n. Omit bestOfN or upgrade the CLI.`
+    );
+  }
+  grokOptions = { ...grokOptions, capabilities };
+
   if (background) {
     const spawned = spawnGrokBackground({
       ...grokOptions,
@@ -654,9 +682,29 @@ async function commandSetup(argv) {
   } else if (!auth.authenticated) {
     nextSteps.push("Run `grok login` (or login from your host agent shell).");
   }
+  const capabilities = availability.available
+    ? detectCliCapabilities({ binary: availability.binary, version: availability.version })
+    : {
+        ...DEFAULT_CAPABILITIES,
+        available: false,
+        unsupported: ["--check", "--best-of-n"]
+      };
+
   if (versionOk === false) {
     nextSteps.push(
       `Upgrade Grok CLI to ≥ ${MIN_GROK_VERSION} for full plugin features (current: ${availability.version}).`
+    );
+  } else if (
+    availability.version &&
+    compareSemver(availability.version, RECOMMENDED_GROK_VERSION) < 0
+  ) {
+    nextSteps.push(
+      `Grok CLI ${RECOMMENDED_GROK_VERSION}+ is recommended (current: ${availability.version}).`
+    );
+  }
+  if (capabilities.unsupported?.length) {
+    nextSteps.push(
+      `This CLI does not support ${capabilities.unsupported.join(", ")}. The plugin will omit those flags.`
     );
   }
 
@@ -667,6 +715,14 @@ async function commandSetup(argv) {
     version: availability.version,
     versionOk,
     minVersion: MIN_GROK_VERSION,
+    recommendedVersion: RECOMMENDED_GROK_VERSION,
+    capabilities: {
+      check: Boolean(capabilities.check),
+      bestOfN: Boolean(capabilities.bestOfN),
+      sandbox: Boolean(capabilities.sandbox),
+      sandboxProfiles: capabilities.builtinSandboxes || [],
+      unsupported: capabilities.unsupported || []
+    },
     authenticated: auth.authenticated,
     authDetail: auth.detail,
     doctorOk: doctor ? doctor.ok : null,
@@ -744,7 +800,7 @@ async function commandTask(argv) {
   });
 
   const cwd = resolveWorkspaceRoot(options.cwd || process.cwd());
-  const prompt = positionals.join(" ").trim();
+  let prompt = positionals.join(" ").trim();
   if (!prompt) {
     throw new Error("Missing task prompt. Example: task fix the failing tests");
   }
@@ -760,6 +816,11 @@ async function commandTask(argv) {
     options["worktree-name"] ||
     (options.worktree ? true : false);
   const check = Boolean(options.check);
+  const capabilities = loadCliCapabilities();
+  const selfCheck = check ? (capabilities.check ? "cli" : "prompted") : null;
+  if (check && !capabilities.check && !options.verbatim) {
+    prompt += CHECK_PROMPT_APPENDIX;
+  }
 
   let resume = null;
   if (options.fresh) {
@@ -811,7 +872,8 @@ async function commandTask(argv) {
     check,
     worktree,
     worktreeRef: options["worktree-ref"],
-    verbatim: Boolean(options.verbatim)
+    verbatim: Boolean(options.verbatim),
+    capabilities
   };
   grokOptions = applyControlToGrokOptions(grokOptions, control);
 
@@ -833,7 +895,8 @@ async function commandTask(argv) {
         config: finished.config || jobConfig,
         bestOfN,
         worktree: Boolean(worktree),
-        check
+        check,
+        selfCheck
       })
     }
   });

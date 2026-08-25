@@ -31,7 +31,7 @@ user-invocable: false
 
 | User intent | Prefer |
 | --- | --- |
-| Stuck on a bug / implement a fix | `grok_rescue` (+ worktree + check) |
+| Stuck on a bug / implement a fix | `grok_rescue` (+ worktree; `check` is prompt-side on CLI 1.0.x) |
 | Unclear approach before coding | `grok_plan` |
 | Architecture / design doc + PR plan | `grok_design` |
 | Ship a design doc’s PR DAG | `grok_execute_plan` (or `latest=true` after design) |

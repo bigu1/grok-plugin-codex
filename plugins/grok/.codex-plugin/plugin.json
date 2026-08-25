@@ -1,18 +1,20 @@
 {
   "name": "grok",
-  "version": "0.5.8",
-  "description": "Use Grok from Codex for reviews, rescue, plan, design, workflows, docs, and media.",
+  "version": "0.6.0",
+  "description": "Codex plugin to use Grok (Grok Build) from OpenAI Codex. 在 Codex 里直接用 Grok。",
   "author": {
-    "name": "stdevMac",
-    "url": "https://github.com/stdevMac"
+    "name": "Biguard",
+    "url": "https://github.com/bigu1"
   },
-  "homepage": "https://github.com/stdevMac/grok-in-codex",
-  "repository": "https://github.com/stdevMac/grok-in-codex",
+  "homepage": "https://github.com/bigu1/grok-plugin-codex",
+  "repository": "https://github.com/bigu1/grok-plugin-codex",
   "license": "Apache-2.0",
   "keywords": [
     "grok",
     "xai",
     "codex",
+    "codex-plugin",
+    "grok-build",
     "mcp",
     "code-review",
     "delegation",
@@ -23,16 +25,15 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Grok",
-    "shortDescription": "Delegate reviews, rescue, plan, design, workflows, docs, and media to Grok",
-    "longDescription": "Use the Grok CLI from Codex for structured code review, plan/design/execute pipelines, Rhai workflows, PR babysitting, documents, background jobs, image/video generation, job status, result retrieval, cancellation, and context transfer.",
-    "developerName": "stdevMac",
+    "shortDescription": "Use Grok inside Codex — reviews, coding, planning, docs, and media",
+    "longDescription": "Codex plugin (MCP) that delegates work to the local Grok Build CLI: structured review, rescue, plan/design/execute, workflows, PR babysitting, documents, image/video, and background jobs. 在 OpenAI Codex 里直接调用 Grok。",
+    "developerName": "Biguard",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/stdevMac/grok-in-codex",
     "defaultPrompt": [
       "Ask Grok to review this branch",
       "Use Grok to plan the auth rewrite",
